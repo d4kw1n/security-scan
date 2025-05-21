@@ -112,7 +112,7 @@ jobs:
                 http_code=$(echo "$api_response" | tail -n1)
                 api_body=$(echo "$api_response" | sed '$d')
 
-                if [ "$http_code" != "200" ]; then
+                if [ "$http_code" == "200" ]; then
                   echo "❌ Failed to get Perplexity analysis for vulnerability: $rule. HTTP Code: $http_code, Response: $api_body"
                   comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to retrieve analysis from Perplexity (HTTP $http_code: $api_body).\n"
                 else
