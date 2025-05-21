@@ -38,7 +38,6 @@ jobs:
             -Dsonar.organization=d4kw1n
             -Dsonar.projectKey=d4kw1n_security-scan
             -Dsonar.sources=.
-            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             -Dsonar.sourceEncoding=UTF-8
             -Dsonar.exclusions=node_modules/**,dist/**,coverage/**
             -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
