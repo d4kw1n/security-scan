@@ -24,15 +24,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # sh: 1: jest: Permission denied
-      # Cấp quyền cho tệp jest
       - name: Grant execute permission to jest
         run: chmod +x ./node_modules/.bin/jest
 
       - name: Run tests with coverage
         run: npm test
         continue-on-error: true
-
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v4
@@ -44,7 +41,41 @@ jobs:
             -Dsonar.organization=d4kw1n
             -Dsonar.projectKey=d4kw1n_security-scan
             -Dsonar.sources=.
-            # -Dsonar.tests=test
-            # -Dsonar.test.inclusions=**/*.test.ts,**/*.spec.ts
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             -Dsonar.sourceEncoding=UTF-8
+            -Dsonar.qualitygate.wait=true
+
+      - name: Check for Vulnerabilities and Comment on PR
+        if: github.event_name == 'pull_request'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Install jq for JSON parsing
+          sudo apt-get update && sudo apt-get install -y jq
+
+          # Query SonarCloud API for vulnerabilities
+          response=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED")
+
+          # Extract vulnerabilities
+          vulnerabilities=$(echo "$response" | jq '.issues')
+
+          # Check if there are vulnerabilities
+          if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
+            # Format vulnerabilities for PR comment
+            comment="⚠️ **SonarCloud found vulnerabilities in your code!**\n\n"
+            comment+="The following vulnerabilities were detected:\n"
+            echo "$vulnerabilities" | jq -r '.[] | "- **\(.rule)**: \(.message) (Severity: \(.severity), File: \(.component), Line: \(.line))"' | while read -r vuln; do
+              comment+="$vuln\n"
+            done
+            comment+="\nPlease review and fix these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan) for details."
+
+            # Post comment to PR
+            echo -e "$comment" > comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
+            exit 1 # Fail the workflow to block merge
+          else
+            echo "✅ No vulnerabilities found. PR can be merged."
+            exit 0 # Success, allow merge
+          fi
+        continue-on-error: false
