@@ -116,7 +116,7 @@ jobs:
                   echo "❌ Failed to get Perplexity analysis for vulnerability: $rule. HTTP Code: $http_code, Response: $api_body"
                   comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to retrieve analysis from Perplexity (HTTP $http_code: $api_body).\n"
                 else
-                  # Validate JSON response
+                  echo "Tới đây rồi"
                   if ! echo "$api_body" | jq . >/dev/null 2>&1; then
                     echo "❌ Invalid JSON response from Perplexity for vulnerability: $rule. Response: $api_body"
                     comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Invalid response from Perplexity.\n"
