@@ -7,6 +7,13 @@ on:
     branches:
       - main
 
+# Add permissions to ensure GITHUB_TOKEN has necessary access
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: write
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -33,21 +40,18 @@ jobs:
         env:
           CI: true
 
-      # Bước 7: Cấp quyền cho thư mục làm việc
       - name: Grant permissions to working directory
         run: |
           chmod -R a+w /home/runner/work/security-scan/security-scan
 
-      # Bước 8: Chạy DAST với OWASP ZAP
       - name: Run OWASP ZAP
         uses: zaproxy/action-baseline@v0.12.0
         with:
           target: 'http://localhost:3000'
           fail_action: false
           allow_issue_writing: false
-          # artifact_name: zap-scan-report  # Đặt tên artifact hợp lệ
+          artifact_name: zap-scan-report  # Use valid artifact name (hyphens, not underscores)
 
-      # Bước 9: Bình luận vào PR nếu không có lỗi (chỉ chạy khi có Pull Request)
       - name: Comment on PR (No Vulnerabilities)
         if: success() && github.event_name == 'pull_request'
         uses: actions/github-script@v6
@@ -60,7 +64,6 @@ jobs:
               body: 'No vulnerabilities detected. Ready to deploy!'
             })
 
-      # Bước 10: Bình luận vào PR nếu có lỗi (chỉ chạy khi có Pull Request)
       - name: Comment on PR (Vulnerabilities Found)
         if: failure() && github.event_name == 'pull_request'
         uses: actions/github-script@v6
@@ -73,7 +76,6 @@ jobs:
               body: 'Vulnerabilities detected. Please review the report.'
             })
 
-      # Bước 11: Thông báo nếu không có Pull Request (tùy chọn)
       - name: Log result (No Pull Request)
         if: github.event_name == 'push'
         run: |
