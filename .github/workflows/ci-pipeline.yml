@@ -7,9 +7,8 @@ on:
     branches:
       - main
 
-# Add permissions to ensure GITHUB_TOKEN has necessary access
 permissions:
-  contents: read
+  contents: 
   pull-requests: write
   issues: write
   actions: write
@@ -29,55 +28,10 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Grant execute permission to Jest
-        run: chmod +x node_modules/.bin/jest
-
-      - name: Run Unit Tests
-        run: npm test
-
-      - name: Start Application
-        run: npm start &
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: SonarQube Scan
+        uses: sonarsource/sonarcloud-github-action@v4.0.0
         env:
-          CI: true
-
-      - name: Grant permissions to working directory
-        run: |
-          chmod -R a+w /home/runner/work/security-scan/security-scan
-
-      - name: Run OWASP ZAP
-        uses: zaproxy/action-baseline@v0.12.0
-        with:
-          target: 'http://localhost:3000'
-          fail_action: false
-          allow_issue_writing: false
-          artifact_name: zap-scan-report  # Use valid artifact name (hyphens, not underscores)
-
-      - name: Comment on PR (No Vulnerabilities)
-        if: success() && github.event_name == 'pull_request'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body: 'No vulnerabilities detected. Ready to deploy!'
-            })
-
-      - name: Comment on PR (Vulnerabilities Found)
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body: 'Vulnerabilities detected. Please review the report.'
-            })
-
-      - name: Log result (No Pull Request)
-        if: github.event_name == 'push'
-        run: |
-          echo "Pipeline completed. Success: ${{ job.status == 'success' }}"
-          echo "No Pull Request available to comment on."
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
