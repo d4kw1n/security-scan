@@ -46,4 +46,32 @@ jobs:
             -Dsonar.sources=.
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             -Dsonar.sourceEncoding=UTF-8
-            
+          
+      - name: Check for Vulnerabilities and Comment on PR
+        if: github.event_name == 'pull_request'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+
+          response=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED&pullRequest=23")
+
+          vulnerabilities=$(echo "$response" | jq '.issues')
+
+          if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
+            comment="⚠️ **SonarCloud found vulnerabilities in your code!**\n\n"
+            comment+="The following vulnerabilities were detected:\n"
+            echo "$vulnerabilities" | jq -r '.[] | "- **\(.rule)**: \(.message) (Severity: \(.severity), File: \(.component), Line: \(.line))"' | while read -r vuln; do
+              comment+="$vuln\n"
+            done
+            comment+="\nPlease review and fix these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=23) for details."
+
+            echo -e "$comment" > comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
+            exit 1 # Fail the workflow to block merge
+          else
+            echo "✅ No vulnerabilities found. PR can be merged."
+            exit 0 # Success, allow merge
+          fi
+        continue-on-error: false
