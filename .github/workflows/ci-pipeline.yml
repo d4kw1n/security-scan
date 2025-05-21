@@ -92,7 +92,7 @@ jobs:
                   -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
                   -H "Content-Type: application/json" \
                   https://api.perplexity.ai/chat/completions \
-                  -d "{\"model\":\"mistral-7b-instruct\",\"messages\":[{\"role\":\"user\",\"content\":$query}]}")
+                  -d "{\"model\":\"sonar-deep-research\",\"messages\":[{\"role\":\"user\",\"content\":$query}]}")
                 
                 # Split response and HTTP code
                 http_code=$(echo "$api_response" | tail -n1)
