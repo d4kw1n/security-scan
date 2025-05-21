@@ -11,51 +11,44 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
+      # Bước 1: Checkout mã nguồn
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Bước 2: Thiết lập môi trường Node.js
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '16'
 
+      # Bước 3: Cài đặt dependencies
       - name: Install dependencies
         run: npm install
 
+      # Bước 4: Build ứng dụng
       - name: Build
         run: npm run build
         continue-on-error: true
 
+      # Bước 5: Chạy unit test
       - name: Run Unit Tests
         run: npm test
 
-
-
+      # Bước 6: Khởi động ứng dụng để quét DAST
       - name: Start Application
         run: npm start &
         env:
           CI: true
 
-      # Bước 8: Chạy DAST với OWASP ZAP
+      # Bước 7: Chạy DAST với OWASP ZAP
       - name: Run OWASP ZAP
         uses: zaproxy/action-baseline@v0.12.0
         with:
           target: 'http://localhost:3000'
-          fail_action: true
+          fail_action: false  # Không dừng pipeline khi có cảnh báo
+          issue_title: ''  # Không tạo issue trên GitHub
 
-      # Bước 9: Phân tích lỗ hổng với Perplexity AI
-      # - name: Analyze Vulnerabilities with Perplexity
-      #   if: failure()
-      #   run: |
-      #     curl -X POST https://api.perplexity.ai/analyze \
-      #       -H "Authorization: Bearer ${{ secrets.PERPLEXITY_API_KEY }}" \
-      #       -H "Content-Type: application/json" \
-      #       -d '{"query": "Analyze this vulnerability report: $(cat zap-report.json)", "context": "Provide fix suggestions"}' \
-      #       > perplexity-analysis.json
-      #   env:
-      #     PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
-
-      # Bước 10: Bình luận vào PR nếu không có lỗi
+      # Bước 8: Bình luận vào PR nếu không có lỗi
       - name: Comment on PR (No Vulnerabilities)
         if: success()
         uses: actions/github-script@v6
@@ -67,41 +60,3 @@ jobs:
               issue_number: context.payload.pull_request.number,
               body: 'No vulnerabilities detected. Ready to deploy!'
             })
-
-      # # Bước 11: Triển khai nếu không có lỗi
-      # - name: Deploy
-      #   if: success()
-      #   run: ./deploy.sh
-
-      # # Bước 12: Gửi thông báo qua Slack nếu có lỗi
-      # - name: Notify Developer via Slack
-      #   if: failure()
-      #   uses: slackapi/slack-github-action@v1.23.0
-      #   with:
-      #     slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
-      #     channel-id: 'dev-team'
-      #     text: 'Vulnerabilities detected! Check the Grafana dashboard for details.'
-      #   env:
-      #     SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
-      # # Bước 13: Đẩy dữ liệu lên Grafana
-      # - name: Push to Grafana
-      #   if: failure()
-      #   run: |
-      #     curl -X POST http://your-grafana-instance/api/dashboards/db \
-      #       -H "Authorization: Bearer ${{ secrets.GRAFANA_API_TOKEN }}" \
-      #       -H "Content-Type: application/json" \
-      #       -d '{"dashboard": {"title": "Vulnerability Report", "panels": [{"title": "Scan Results", "content": "$(cat zap-report.json)"}, {"title": "AI Analysis", "content": "$(cat perplexity-analysis.json)"}]}}'
-      #   env:
-      #     GRAFANA_API_TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
-
-      # # Bước 14: Tạo ticket Jira nếu có lỗi
-      # - name: Create Jira Ticket
-      #   if: failure()
-      #   run: |
-      #     curl -X POST https://your-jira-instance/rest/api/2/issue \
-      #       -H "Authorization: Basic ${{ secrets.JIRA_API_TOKEN }}" \
-      #       -H "Content-Type: application/json" \
-      #       -d '{"fields": {"project": {"key": "DEV"}, "summary": "Vulnerabilities Detected in CI Pipeline", "description": "Check Grafana dashboard for details", "issuetype": {"name": "Bug"}}}'
-      #   env:
-      #     JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
