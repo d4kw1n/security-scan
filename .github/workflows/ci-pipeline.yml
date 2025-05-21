@@ -91,7 +91,7 @@ jobs:
                   --arg severity "$severity" \
                   --arg file "$file" \
                   --arg line "$line" \
-                  '{model: "mistral-7b-instruct", messages: [{role: "user", content: "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: \($rule)\n- Message: \($message)\n- Severity: \($severity)\n- File: \($file)\n- Line: \($line)"}]}')
+                  '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: \($rule)\n- Message: \($message)\n- Severity: \($severity)\n- File: \($file)\n- Line: \($line)"}]}')
 
                 # Call Perplexity API
                 api_response=$(curl -s -w "\n%{http_code}" -X POST \
