@@ -76,27 +76,13 @@ jobs:
             if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
               comment+="### Vulnerabilities Analysis by Perplexity\n"
               # Loop through each vulnerability
-              echo "❌Found $vulnerabilities"
-              if [ -z "$vulnerabilities" ]; then
-                echo "Error: vulnerabilities is empty" >&2
-                exit 1
-              fi
-
-              echo "$vulnerabilities" | jq -r '.[] | @base64' 2>/dev/null | while read -r vuln_base64; do
-                vuln=$(echo "$vuln_base64" | base64 --decode 2>/dev/null)
-                if [ $? -ne 0 ]; then
-                  echo "Error: Failed to decode base64: $vuln_base64" >&2
-                  continue
-                fi
-
-                read -r rule message severity file line < <(echo "$vuln" | jq -r '[.rule, .message, .severity, .component, (.line // "N/A")] | @tsv' 2>/dev/null)
-                if [ $? -ne 0 ]; then
-                  echo "Error: Failed to parse JSON: $vuln" >&2
-                  continue
-                fi
-
-                echo "Rule: $rule, Message: $message, Severity: $severity, File: $file, Line: $line"
-              done
+              echo "$vulnerabilities" | jq -r '.[] | @base64' | while read -r vuln_base64; do
+                vuln=$(echo "$vuln_base64" | base64 --decode)
+                rule=$(echo "$vuln" | jq -r '.rule')
+                message=$(echo "$vuln" | jq -r '.message')
+                severity=$(echo "$vuln" | jq -r '.severity')
+                file=$(echo "$vuln" | jq -r '.component')
+                line=$(echo "$vuln" | jq -r '.line // "N/A"')
 
                 query=$(printf "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: %s\n- Message: %s\n- Severity: %s\n- File: %s\n- Line: %s" "$rule" "$message" "$severity" "$file" "$line" | jq -sR '.')
 
@@ -105,7 +91,7 @@ jobs:
                   -H "Content-Type: application/json" \
                   https://api.perplexity.ai/chat/completions \
                   -d "{\"model\":\"sonar-reasoning\",\"messages\":[{\"role\":\"user\",\"content\":$query}]}")
-                
+                echo "xxx $api_response"
                 http_code=$(echo "$api_response" | tail -n1)
                 api_body=$(echo "$api_response" | sed '$d')
 
