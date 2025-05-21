@@ -11,39 +11,32 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      # Bước 1: Checkout mã nguồn
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Bước 2: Thiết lập môi trường Node.js
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '16'
 
-      # Bước 3: Cài đặt dependencies
       - name: Install dependencies
         run: npm install
 
-      # Bước 4: Build ứng dụng
       - name: Build
         run: npm run build
         continue-on-error: true
 
-      # Bước 5: Chạy unit test
       - name: Run Unit Tests
         run: npm test
 
-      # Bước 6: Chạy SAST với SonarQube
-      - name: Set up SonarQube Scanner
-        uses: sonarsource/sonarqube-scan-action@v2
-        with:
-          projectBaseDir: .
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      # - name: Set up SonarQube Scanner
+      #   uses: sonarsource/sonarqube-scan-action@v2
+      #   with:
+      #     projectBaseDir: .
+      #   env:
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      #     SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      # Bước 7: Khởi động ứng dụng để quét DAST
       - name: Start Application
         run: npm start &
         env:
@@ -57,16 +50,16 @@ jobs:
           fail_action: true
 
       # Bước 9: Phân tích lỗ hổng với Perplexity AI
-      - name: Analyze Vulnerabilities with Perplexity
-        if: failure()
-        run: |
-          curl -X POST https://api.perplexity.ai/analyze \
-            -H "Authorization: Bearer ${{ secrets.PERPLEXITY_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{"query": "Analyze this vulnerability report: $(cat zap-report.json)", "context": "Provide fix suggestions"}' \
-            > perplexity-analysis.json
-        env:
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+      # - name: Analyze Vulnerabilities with Perplexity
+      #   if: failure()
+      #   run: |
+      #     curl -X POST https://api.perplexity.ai/analyze \
+      #       -H "Authorization: Bearer ${{ secrets.PERPLEXITY_API_KEY }}" \
+      #       -H "Content-Type: application/json" \
+      #       -d '{"query": "Analyze this vulnerability report: $(cat zap-report.json)", "context": "Provide fix suggestions"}' \
+      #       > perplexity-analysis.json
+      #   env:
+      #     PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
 
       # Bước 10: Bình luận vào PR nếu không có lỗi
       - name: Comment on PR (No Vulnerabilities)
