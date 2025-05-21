@@ -1,9 +1,6 @@
 name: SonarQube Cloud Scan
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
     types: [opened, synchronize, reopened]
 
@@ -24,15 +21,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # sh: 1: jest: Permission denied
-      # Cấp quyền cho tệp jest
       - name: Grant execute permission to jest
         run: chmod +x ./node_modules/.bin/jest
 
       - name: Run tests with coverage
         run: npm test
         continue-on-error: true
-
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v4
@@ -46,27 +40,45 @@ jobs:
             -Dsonar.sources=.
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             -Dsonar.sourceEncoding=UTF-8
-          
+            -Dsonar.exclusions=node_modules/**,dist/**,coverage/**
+            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
+            -Dsonar.pullrequest.branch=${{ github.head_ref }}
+            -Dsonar.pullrequest.base=${{ github.base_ref }}
+            -Dsonar.qualitygate.wait=true
+
       - name: Check for Vulnerabilities and Comment on PR
-        if: github.event_name == 'pull_request'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Install jq
           sudo apt-get update && sudo apt-get install -y jq
 
-          response=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED&pullRequest=23")
+          # Query SonarCloud API for vulnerabilities
+          response=$(curl -s -f -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED&pullRequest=${{ github.event.pull_request.number }}")
+          if [ $? -ne 0 ]; then
+            echo "❌ Failed to query SonarCloud API. Check SONAR_TOKEN or network."
+            exit 1
+          fi
 
+          # Extract vulnerabilities
           vulnerabilities=$(echo "$response" | jq '.issues')
+          if [ $? -ne 0 ]; then
+            echo "❌ Failed to parse API response. Response: $response"
+            exit 1
+          fi
 
+          # Check if there are vulnerabilities
           if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
+            # Format vulnerabilities for PR comment
             comment="⚠️ **SonarCloud found vulnerabilities in your code!**\n\n"
             comment+="The following vulnerabilities were detected:\n"
-            echo "$vulnerabilities" | jq -r '.[] | "- **\(.rule)**: \(.message) (Severity: \(.severity), File: \(.component), Line: \(.line))"' | while read -r vuln; do
+            echo "$vulnerabilities" | jq -r '.[] | "- **\(.rule)**: \(.message) (Severity: \(.severity), File: \(.component), Line: \(.line // \"N/A\")")"' | while read -r vuln; do
               comment+="$vuln\n"
             done
-            comment+="\nPlease review and fix these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=23) for details."
+            comment+="\nPlease review and fix these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details."
 
+            # Post comment to PR
             echo -e "$comment" > comment.md
             gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
             exit 1 # Fail the workflow to block merge
