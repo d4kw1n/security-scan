@@ -4,13 +4,18 @@
   "main": "main.js",
   "scripts": {
     "start": "node main.js",
-    "test": "echo 'No tests specified' && exit 0"
+    "test": "jest"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "supertest": "^7.1.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }

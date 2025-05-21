@@ -1,71 +1,114 @@
-name: CI Pipeline
+name: SonarQube Cloud Scan
+
 on:
-  push:
-    branches:
-      - main
   pull_request:
-    branches:
-      - main
+    types: [opened, synchronize, reopened]
 
 jobs:
-  build-and-test:
+  sonarqube:
+    name: SonarQube Scan
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: '16'
+          node-version: '20'
 
       - name: Install dependencies
         run: npm install
 
-      # Bước 4: Build ứng dụng
-      - name: Build
-        run: npm run build
+      - name: Grant execute permission to jest
+        run: chmod +x ./node_modules/.bin/jest
+
+      - name: Run tests with coverage
+        run: npm test
         continue-on-error: true
 
-      - name: Run Unit Tests
-        run: npm test
-
-      - name: Start Application
-        run: npm start &
+      - name: SonarQube Scan
+        id: sonar_scan
+        uses: SonarSource/sonarqube-scan-action@v4
         env:
-          CI: true
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+        with:
+          args: >
+            -Dsonar.organization=d4kw1n
+            -Dsonar.projectKey=d4kw1n_security-scan
+            -Dsonar.sources=.
+            -Dsonar.sourceEncoding=UTF-8
+            -Dsonar.exclusions=node_modules/**,dist/**,coverage/**
+            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
+            -Dsonar.pullrequest.branch=${{ github.head_ref }}
+            -Dsonar.pullrequest.base=${{ github.base_ref }}
+            -Dsonar.qualitygate.wait=true
+        continue-on-error: true
 
-      - name: Grant permissions to working directory
+      - name: Check for Vulnerabilities and Trigger PR Review Agent
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          chmod -R a+w /home/runner/work/security-scan/security-scan
+          sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Run OWASP ZAP
-        uses: zaproxy/action-baseline@v0.12.0
-        with:
-          target: 'http://localhost:3000'
-          fail_action: false
-          issue_title: ''
+          # Query SonarCloud API for vulnerabilities
+          response=$(curl -s -f -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED&pullRequest=${{ github.event.pull_request.number }}")
+          if [ $? -ne 0 ]; then
+            echo "❌ Failed to query SonarCloud API. Check SONAR_TOKEN or network."
+            exit 1
+          fi
 
-      - name: Comment on PR (No Vulnerabilities)
-        if: success()
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body: 'No vulnerabilities detected. Ready to deploy!'
-            })
+          # Extract vulnerabilities
+          vulnerabilities=$(echo "$response" | jq '.issues')
+          if [ $? -ne 0 ]; then
+            echo "❌ Failed to parse API response. Response: $response"
+            exit 1
+          fi
 
-      - name: Comment on PR (Vulnerabilities Found)
-        if: failure()
-        uses: actions/github-script@v6
+          # Check if there are vulnerabilities or Quality Gate failed
+          if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ] || [ "${{ steps.sonar_scan.outcome }}" != "success" ]; then
+            # Save vulnerabilities to file
+            echo "$vulnerabilities" > vulnerabilities.json
+            # Upload vulnerabilities as artifact
+            echo "Uploading vulnerabilities.json as artifact"
+            echo "{\"vulnerabilities\": $(cat vulnerabilities.json)}" > artifact.json
+            # Create comment for PR
+            comment="⚠️ **SonarCloud Quality Gate Failed!**\n\n"
+            if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
+              comment+="Vulnerabilities detected and sent to Perplexity PR Review Agent for detailed analysis. Please wait for the detailed report.\n"
+              echo "$vulnerabilities" | jq -r '.[] | "- **\(.rule)**: \(.message) (Severity: \(.severity), File: \(.component), Line: \(.line // \"N/A\")")"' | while read -r vuln; do
+                comment+="$vuln\n"
+              done
+            else
+              comment+="No vulnerabilities found, but Quality Gate failed due to other criteria (e.g., coverage).\n"
+            fi
+            comment+="\nSee [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details."
+
+            # Post preliminary comment to PR
+            echo -e "$comment" > comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
+
+            # Trigger PR Review Agent workflow
+            curl -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              https://api.github.com/repos/${{ github.repository }}/dispatches \
+              -d "{\"event_type\":\"perplexity_review\",\"client_payload\":{\"pr_number\":${{ github.event.pull_request.number }},\"artifact_name\":\"vulnerabilities\"}}"
+
+            exit 1 # Fail the workflow to block merge
+          else
+            echo "✅ No vulnerabilities found and Quality Gate passed. PR can be merged."
+            exit 0 # Success, allow merge
+          fi
+        continue-on-error: false
+
+      - name: Upload Vulnerabilities Artifact
+        if: failure() # Run only if vulnerabilities were detected
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body: 'Vulnerabilities detected. Please review the report.'
-            })
+          name: vulnerabilities
+          path: artifact.json
