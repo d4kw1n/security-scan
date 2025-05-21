@@ -92,7 +92,7 @@ jobs:
                   --arg severity "$severity" \
                   --arg file "$file" \
                   --arg line "$line" \
-                  '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: \($rule)\n- Message: \($message)\n- Severity: \($severity)\n- File: \($file)\n- Line: \($line)"}]}')
+                  '{model: "mistral-7b-instruct", messages: [{role: "user", content: "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: \($rule)\n- Message: \($message)\n- Severity: \($severity)\n- File: \($file)\n- Line: \($line)"}]}')
 
                 # Validate payload
                 if ! echo "$payload" | jq . >/dev/null 2>&1; then
@@ -100,6 +100,10 @@ jobs:
                   comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to create valid request for Perplexity.\n"
                   continue
                 fi
+
+                # Log payload for debugging
+                echo "Sending payload to Perplexity for vulnerability: $rule"
+                echo "Payload: $payload"
 
                 # Call Perplexity API
                 api_response=$(curl -s -w "\n%{http_code}" -X POST \
@@ -112,11 +116,16 @@ jobs:
                 http_code=$(echo "$api_response" | tail -n1)
                 api_body=$(echo "$api_response" | sed '$d')
 
-                if [ "$http_code" == "200" ]; then
+                # Log API response for debugging
+                echo "Perplexity API response for vulnerability: $rule"
+                echo "HTTP Code: $http_code"
+                echo "Response Body: $api_body"
+
+                if [ "$http_code" != "200" ]; then
                   echo "❌ Failed to get Perplexity analysis for vulnerability: $rule. HTTP Code: $http_code, Response: $api_body"
                   comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to retrieve analysis from Perplexity (HTTP $http_code: $api_body).\n"
                 else
-                  echo "Tới đây rồi"
+                  # Validate JSON response
                   if ! echo "$api_body" | jq . >/dev/null 2>&1; then
                     echo "❌ Invalid JSON response from Perplexity for vulnerability: $rule. Response: $api_body"
                     comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Invalid response from Perplexity.\n"
@@ -127,10 +136,14 @@ jobs:
                       echo "❌ Empty or missing analysis in Perplexity response for vulnerability: $rule. Response: $api_body"
                       comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: No analysis provided by Perplexity.\n"
                     else
-                      comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis:\n    $analysis\n"
+                      # Clean up analysis for PR comment (remove <think> tags and excessive newlines)
+                      clean_analysis=$(echo "$analysis" | sed '/<think>/,/<\/think>/d' | sed '/^$/N;/\n$/D')
+                      comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis:\n    $clean_analysis\n"
                     fi
                   fi
                 fi
+                # Add delay to avoid rate limiting
+                sleep 1
               done
             else
               comment+="No vulnerabilities found, but Quality Gate failed due to other criteria (e.g., coverage).\n"
