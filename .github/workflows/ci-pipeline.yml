@@ -47,10 +47,11 @@ jobs:
             -Dsonar.qualitygate.wait=true
         continue-on-error: true
 
-      - name: Check for Vulnerabilities and Trigger PR Review Agent
+      - name: Check for Vulnerabilities and Analyze with Perplexity
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
         run: |
           sudo apt-get update && sudo apt-get install -y jq
 
@@ -70,45 +71,49 @@ jobs:
 
           # Check if there are vulnerabilities or Quality Gate failed
           if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ] || [ "${{ steps.sonar_scan.outcome }}" != "success" ]; then
-            # Save vulnerabilities to file
-            echo "$vulnerabilities" > vulnerabilities.json
-            # Upload vulnerabilities as artifact
-            echo "Uploading vulnerabilities.json as artifact"
-            echo "{\"vulnerabilities\": $(cat vulnerabilities.json)}" > artifact.json
-            # Create comment for PR
+            # Initialize comment
             comment="⚠️ **SonarCloud Quality Gate Failed!**\n\n"
             if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
-              comment+="Vulnerabilities detected and sent to Perplexity PR Review Agent for detailed analysis. Please wait for the detailed report.\n"
-              echo "$vulnerabilities" | jq -r '.[] | "- **\(.rule)**: \(.message) (Severity: \(.severity), File: \(.component), Line: \(.line // \"N/A\")")"' | while read -r vuln; do
-                comment+="$vuln\n"
+              comment+="### Vulnerabilities Analysis by Perplexity\n"
+              # Loop through each vulnerability
+              echo "$vulnerabilities" | jq -r '.[] | @base64' | while read -r vuln_base64; do
+                vuln=$(echo "$vuln_base64" | base64 --decode)
+                rule=$(echo "$vuln" | jq -r '.rule')
+                message=$(echo "$vuln" | jq -r '.message')
+                severity=$(echo "$vuln" | jq -r '.severity')
+                file=$(echo "$vuln" | jq -r '.component')
+                line=$(echo "$vuln" | jq -r '.line // "N/A"')
+
+                # Create query for Perplexity API
+                query="Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: $rule\n- Message: $message\n- Severity: $severity\n- File: $file\n- Line: $line"
+
+                # Call Perplexity API
+                api_response=$(curl -s -X POST \
+                  -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
+                  -H "Content-Type: application/json" \
+                  https://api.perplexity.ai/chat/completions \
+                  -d "{\"model\":\"llama-3.1-sonar-large-70b-online\",\"messages\":[{\"role\":\"user\",\"content\":\"$query\"}]}")
+                
+                # Extract Perplexity analysis
+                analysis=$(echo "$api_response" | jq -r '.choices[0].message.content // "Failed to get analysis from Perplexity."')
+                if [ "$analysis" = "Failed to get analysis from Perplexity." ]; then
+                  echo "❌ Failed to get analysis for vulnerability: $rule"
+                  comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to retrieve detailed analysis from Perplexity.\n"
+                else
+                  comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis:\n    $analysis\n"
+                fi
               done
             else
               comment+="No vulnerabilities found, but Quality Gate failed due to other criteria (e.g., coverage).\n"
             fi
-            comment+="\nSee [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details."
+            comment+="\nPlease review and address these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details."
 
-            # Post preliminary comment to PR
+            # Post comment to PR
             echo -e "$comment" > comment.md
             gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
-
-            # Trigger PR Review Agent workflow
-            curl -X POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              https://api.github.com/repos/${{ github.repository }}/dispatches \
-              -d "{\"event_type\":\"perplexity_review\",\"client_payload\":{\"pr_number\":${{ github.event.pull_request.number }},\"artifact_name\":\"vulnerabilities\"}}"
-
             exit 1 # Fail the workflow to block merge
           else
             echo "✅ No vulnerabilities found and Quality Gate passed. PR can be merged."
             exit 0 # Success, allow merge
           fi
         continue-on-error: false
-
-      - name: Upload Vulnerabilities Artifact
-        if: failure() # Run only if vulnerabilities were detected
-        uses: actions/upload-artifact@v4
-        with:
-          name: vulnerabilities
-          path: artifact.json
