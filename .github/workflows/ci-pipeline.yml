@@ -50,7 +50,7 @@ jobs:
         with:
           target: 'http://localhost:3000'
           fail_action: false
-          issue_title: ''
+          allow_issue_writing: false  # Vô hiệu hóa tạo issue trên GitHub
 
       # Bước 9: Bình luận vào PR nếu không có lỗi (chỉ chạy khi có Pull Request)
       - name: Comment on PR (No Vulnerabilities)
