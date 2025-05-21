@@ -29,6 +29,7 @@ jobs:
         continue-on-error: true
 
       - name: SonarQube Scan
+        id: sonar_scan
         uses: SonarSource/sonarqube-scan-action@v4
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -44,8 +45,9 @@ jobs:
             -Dsonar.pullrequest.branch=${{ github.head_ref }}
             -Dsonar.pullrequest.base=${{ github.base_ref }}
             -Dsonar.qualitygate.wait=true
+        continue-on-error: true
 
-      - name: Check for Vulnerabilities and Comment on PR
+      - name: Check for Issues and Comment on PR
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -53,28 +55,32 @@ jobs:
           # Install jq
           sudo apt-get update && sudo apt-get install -y jq
 
-          # Query SonarCloud API for vulnerabilities
-          response=$(curl -s -f -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED&pullRequest=${{ github.event.pull_request.number }}")
+          # Query SonarCloud API for issues (vulnerabilities, bugs, code smells)
+          response=$(curl -s -f -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY,BUG,CODE_SMELL&statuses=OPEN,CONFIRMED,REOPENED&pullRequest=${{ github.event.pull_request.number }}")
           if [ $? -ne 0 ]; then
             echo "❌ Failed to query SonarCloud API. Check SONAR_TOKEN or network."
             exit 1
           fi
 
-          # Extract vulnerabilities
-          vulnerabilities=$(echo "$response" | jq '.issues')
+          # Extract issues
+          issues=$(echo "$response" | jq '.issues')
           if [ $? -ne 0 ]; then
             echo "❌ Failed to parse API response. Response: $response"
             exit 1
           fi
 
-          # Check if there are vulnerabilities
-          if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
-            # Format vulnerabilities for PR comment
-            comment="⚠️ **SonarCloud found vulnerabilities in your code!**\n\n"
-            comment+="The following vulnerabilities were detected:\n"
-            echo "$vulnerabilities" | jq -r '.[] | "- **\(.rule)**: \(.message) (Severity: \(.severity), File: \(.component), Line: \(.line // \"N/A\")")"' | while read -r vuln; do
-              comment+="$vuln\n"
-            done
+          # Check if there are issues or Quality Gate failed
+          if [ "$(echo "$issues" | jq length)" -gt 0 ] || [ "${{ steps.sonar_scan.outcome }}" != "success" ]; then
+            # Format issues for PR comment
+            comment="⚠️ **SonarCloud Quality Gate Failed!**\n\n"
+            if [ "$(echo "$issues" | jq length)" -gt 0 ]; then
+              comment+="The following issues were detected:\n"
+              echo "$issues" | jq -r '.[] | "- **\(.rule)**: \(.message) (Type: \(.type), Severity: \(.severity), File: \(.component), Line: \(.line // \"N/A\")")"' | while read -r issue; do
+                comment+="$issue\n"
+              done
+            else
+              comment+="No specific vulnerabilities, bugs, or code smells found, but Quality Gate failed due to other criteria (e.g., coverage).\n"
+            fi
             comment+="\nPlease review and fix these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details."
 
             # Post comment to PR
@@ -82,7 +88,7 @@ jobs:
             gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
             exit 1 # Fail the workflow to block merge
           else
-            echo "✅ No vulnerabilities found. PR can be merged."
-            exit 0 
+            echo "✅ No issues found and Quality Gate passed. PR can be merged."
+            exit 0 # Success, allow merge
           fi
         continue-on-error: false
