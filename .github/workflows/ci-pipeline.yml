@@ -29,13 +29,7 @@ jobs:
       - name: Run Unit Tests
         run: npm test
 
-      # - name: Set up SonarQube Scanner
-      #   uses: sonarsource/sonarqube-scan-action@v2
-      #   with:
-      #     projectBaseDir: .
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
 
       - name: Start Application
         run: npm start &
