@@ -11,17 +11,14 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      # Bước 1: Checkout mã nguồn
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Bước 2: Thiết lập môi trường Node.js
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '16'
 
-      # Bước 3: Cài đặt dependencies
       - name: Install dependencies
         run: npm install
 
@@ -30,25 +27,25 @@ jobs:
         run: npm run build
         continue-on-error: true
 
-      # Bước 5: Chạy unit test
       - name: Run Unit Tests
         run: npm test
 
-      # Bước 6: Khởi động ứng dụng để quét DAST
       - name: Start Application
         run: npm start &
         env:
           CI: true
 
-      # Bước 7: Chạy DAST với OWASP ZAP
+      - name: Grant permissions to working directory
+        run: |
+          chmod -R a+w /home/runner/work/security-scan/security-scan
+
       - name: Run OWASP ZAP
         uses: zaproxy/action-baseline@v0.12.0
         with:
           target: 'http://localhost:3000'
-          fail_action: false  # Không dừng pipeline khi có cảnh báo
-          issue_title: ''  # Không tạo issue trên GitHub
+          fail_action: false
+          issue_title: ''
 
-      # Bước 8: Bình luận vào PR nếu không có lỗi
       - name: Comment on PR (No Vulnerabilities)
         if: success()
         uses: actions/github-script@v6
@@ -59,4 +56,16 @@ jobs:
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
               body: 'No vulnerabilities detected. Ready to deploy!'
+            })
+
+      - name: Comment on PR (Vulnerabilities Found)
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: 'Vulnerabilities detected. Please review the report.'
             })
