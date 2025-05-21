@@ -84,14 +84,23 @@ jobs:
                 file=$(echo "$vuln" | jq -r '.component')
                 line=$(echo "$vuln" | jq -r '.line // "N/A"')
 
-                query=$(printf "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: %s\n- Message: %s\n- Severity: %s\n- File: %s\n- Line: %s" "$rule" "$message" "$severity" "$file" "$line" | jq -sR '.')
+                # Create JSON payload with escaped fields
+                payload=$(jq -n \
+                  --arg rule "$rule" \
+                  --arg message "$message" \
+                  --arg severity "$severity" \
+                  --arg file "$file" \
+                  --arg line "$line" \
+                  '{model: "mistral-7b-instruct", messages: [{role: "user", content: "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: \($rule)\n- Message: \($message)\n- Severity: \($severity)\n- File: \($file)\n- Line: \($line)"}]}')
 
+                # Call Perplexity API
                 api_response=$(curl -s -w "\n%{http_code}" -X POST \
                   -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
                   -H "Content-Type: application/json" \
                   https://api.perplexity.ai/chat/completions \
-                  -d "{\"model\":\"sonar-reasoning\",\"messages\":[{\"role\":\"user\",\"content\":$query}]}")
-                echo "xxx $api_response"
+                  -d "$payload")
+                
+                # Split response and HTTP code
                 http_code=$(echo "$api_response" | tail -n1)
                 api_body=$(echo "$api_response" | sed '$d')
 
@@ -99,13 +108,19 @@ jobs:
                   echo "❌ Failed to get Perplexity analysis for vulnerability: $rule. HTTP Code: $http_code, Response: $api_body"
                   comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to retrieve analysis from Perplexity (HTTP $http_code).\n"
                 else
-                  # Extract Perplexity analysis
-                  analysis=$(echo "$api_body" | jq -r '.choices[0].message.content // "Failed to get analysis from Perplexity."')
-                  if [ "$analysis" = "Failed to get analysis from Perplexity." ]; then
-                    echo "❌ Failed to parse Perplexity response for vulnerability: $rule. Response: $api_body"
-                    comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to parse analysis from Perplexity.\n"
+                  # Validate JSON response
+                  if ! echo "$api_body" | jq . >/dev/null 2>&1; then
+                    echo "❌ Invalid JSON response from Perplexity for vulnerability: $rule. Response: $api_body"
+                    comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Invalid response from Perplexity.\n"
                   else
-                    comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis:\n    $analysis\n"
+                    # Extract Perplexity analysis
+                    analysis=$(echo "$api_body" | jq -r '.choices[0].message.content // ""')
+                    if [ -z "$analysis" ]; then
+                      echo "❌ Empty or missing analysis in Perplexity response for vulnerability: $rule. Response: $api_body"
+                      comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: No analysis provided by Perplexity.\n"
+                    else
+                      comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis:\n    $analysis\n"
+                    fi
                   fi
                 fi
               done
