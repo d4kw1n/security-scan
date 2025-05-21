@@ -1,37 +1,44 @@
-name: CI Pipeline
+name: SonarQube Cloud Scan
+
 on:
   push:
     branches:
       - main
   pull_request:
-    branches:
-      - main
-
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-  actions: write
+    types: [opened, synchronize, reopened]
 
 jobs:
-  build-and-test:
+  sonarqube:
+    name: SonarQube Scan
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '16'
+          node-version: '20'
 
       - name: Install dependencies
         run: npm install
 
-      - name: SonarCloud Scan
-        uses: sonarsource/sonarcloud-github-action@v4.0.0
+      - name: Run tests with coverage
+        run: npm test
+        continue-on-error: true
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v4
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          SONAR_HOST_URL: https://sonarcloud.io
+        with:
+          args: >
+            -Dsonar.organization=d4kw1n
+            -Dsonar.projectKey=d4kw1n_security-scan
+            -Dsonar.sources=src
+            -Dsonar.tests=test
+            -Dsonar.test.inclusions=**/*.test.ts,**/*.spec.ts
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.sourceEncoding=UTF-8
