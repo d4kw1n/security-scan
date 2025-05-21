@@ -76,6 +76,7 @@ jobs:
             if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
               comment+="### Vulnerabilities Analysis by Perplexity\n"
               # Loop through each vulnerability
+              echo "❌Found $vulnerabilities"
               echo "$vulnerabilities" | jq -r '.[] | @base64' | while read -r vuln_base64; do
                 vuln=$(echo "$vuln_base64" | base64 --decode)
                 rule=$(echo "$vuln" | jq -r '.rule')
@@ -84,17 +85,14 @@ jobs:
                 file=$(echo "$vuln" | jq -r '.component')
                 line=$(echo "$vuln" | jq -r '.line // "N/A"')
 
-                # Escape special characters in query
                 query=$(printf "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: %s\n- Message: %s\n- Severity: %s\n- File: %s\n- Line: %s" "$rule" "$message" "$severity" "$file" "$line" | jq -sR '.')
 
-                # Call Perplexity API
                 api_response=$(curl -s -w "\n%{http_code}" -X POST \
                   -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
                   -H "Content-Type: application/json" \
                   https://api.perplexity.ai/chat/completions \
                   -d "{\"model\":\"sonar-reasoning\",\"messages\":[{\"role\":\"user\",\"content\":$query}]}")
                 
-                # Split response and HTTP code
                 http_code=$(echo "$api_response" | tail -n1)
                 api_body=$(echo "$api_response" | sed '$d')
 
