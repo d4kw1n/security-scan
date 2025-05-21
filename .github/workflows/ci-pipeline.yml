@@ -65,7 +65,7 @@ jobs:
           # Extract vulnerabilities
           vulnerabilities=$(echo "$response" | jq '.issues')
           if [ $? -ne 0 ]; then
-            echo "❌ Failed to parse API response. Response: $response"
+            echo "❌ Failed to parse SonarCloud API response. Response: $response"
             exit 1
           fi
 
@@ -84,23 +84,32 @@ jobs:
                 file=$(echo "$vuln" | jq -r '.component')
                 line=$(echo "$vuln" | jq -r '.line // "N/A"')
 
-                # Create query for Perplexity API
-                query="Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: $rule\n- Message: $message\n- Severity: $severity\n- File: $file\n- Line: $line"
+                # Escape special characters in query
+                query=$(printf "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: %s\n- Message: %s\n- Severity: %s\n- File: %s\n- Line: %s" "$rule" "$message" "$severity" "$file" "$line" | jq -sR '.')
 
                 # Call Perplexity API
-                api_response=$(curl -s -X POST \
+                api_response=$(curl -s -w "\n%{http_code}" -X POST \
                   -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
                   -H "Content-Type: application/json" \
                   https://api.perplexity.ai/chat/completions \
-                  -d "{\"model\":\"llama-3.1-sonar-large-70b-online\",\"messages\":[{\"role\":\"user\",\"content\":\"$query\"}]}")
+                  -d "{\"model\":\"mistral-7b-instruct\",\"messages\":[{\"role\":\"user\",\"content\":$query}]}")
                 
-                # Extract Perplexity analysis
-                analysis=$(echo "$api_response" | jq -r '.choices[0].message.content // "Failed to get analysis from Perplexity."')
-                if [ "$analysis" = "Failed to get analysis from Perplexity." ]; then
-                  echo "❌ Failed to get analysis for vulnerability: $rule"
-                  comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to retrieve detailed analysis from Perplexity.\n"
+                # Split response and HTTP code
+                http_code=$(echo "$api_response" | tail -n1)
+                api_body=$(echo "$api_response" | sed '$d')
+
+                if [ "$http_code" != "200" ]; then
+                  echo "❌ Failed to get Perplexity analysis for vulnerability: $rule. HTTP Code: $http_code, Response: $api_body"
+                  comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to retrieve analysis from Perplexity (HTTP $http_code).\n"
                 else
-                  comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis:\n    $analysis\n"
+                  # Extract Perplexity analysis
+                  analysis=$(echo "$api_body" | jq -r '.choices[0].message.content // "Failed to get analysis from Perplexity."')
+                  if [ "$analysis" = "Failed to get analysis from Perplexity." ]; then
+                    echo "❌ Failed to parse Perplexity response for vulnerability: $rule. Response: $api_body"
+                    comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to parse analysis from Perplexity.\n"
+                  else
+                    comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis:\n    $analysis\n"
+                  fi
                 fi
               done
             else
