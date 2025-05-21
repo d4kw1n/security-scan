@@ -11,29 +11,23 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      # Bước 1: Checkout mã nguồn
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Bước 2: Thiết lập môi trường Node.js
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '16'
 
-      # Bước 3: Cài đặt dependencies
       - name: Install dependencies
         run: npm install
 
-      # Bước 4: Cấp quyền thực thi cho Jest (nếu cần)
       - name: Grant execute permission to Jest
         run: chmod +x node_modules/.bin/jest
 
-      # Bước 5: Chạy unit test
       - name: Run Unit Tests
         run: npm test
 
-      # Bước 6: Khởi động ứng dụng để quét DAST
       - name: Start Application
         run: npm start &
         env:
@@ -51,7 +45,7 @@ jobs:
           target: 'http://localhost:3000'
           fail_action: false
           allow_issue_writing: false
-          artifact_name: zap-scan-report  # Đặt tên artifact hợp lệ
+          # artifact_name: zap-scan-report  # Đặt tên artifact hợp lệ
 
       # Bước 9: Bình luận vào PR nếu không có lỗi (chỉ chạy khi có Pull Request)
       - name: Comment on PR (No Vulnerabilities)
