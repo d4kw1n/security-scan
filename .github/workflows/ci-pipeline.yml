@@ -11,34 +11,36 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
+      # Bước 1: Checkout mã nguồn
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Bước 2: Thiết lập môi trường Node.js
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '16'
 
+      # Bước 3: Cài đặt dependencies
       - name: Install dependencies
         run: npm install
 
-      # Bước 4: Build ứng dụng
-      - name: Build
-        run: npm run build
-        continue-on-error: true
-
+      # Bước 4: Chạy unit test
       - name: Run Unit Tests
         run: npm test
 
+      # Bước 5: Khởi động ứng dụng để quét DAST
       - name: Start Application
         run: npm start &
         env:
           CI: true
 
+      # Bước 6: Cấp quyền cho thư mục làm việc
       - name: Grant permissions to working directory
         run: |
           chmod -R a+w /home/runner/work/security-scan/security-scan
 
+      # Bước 7: Chạy DAST với OWASP ZAP
       - name: Run OWASP ZAP
         uses: zaproxy/action-baseline@v0.12.0
         with:
@@ -46,8 +48,9 @@ jobs:
           fail_action: false
           issue_title: ''
 
+      # Bước 8: Bình luận vào PR nếu không có lỗi (chỉ chạy khi có Pull Request)
       - name: Comment on PR (No Vulnerabilities)
-        if: success()
+        if: success() && github.event_name == 'pull_request'
         uses: actions/github-script@v6
         with:
           script: |
@@ -58,8 +61,9 @@ jobs:
               body: 'No vulnerabilities detected. Ready to deploy!'
             })
 
+      # Bước 9: Bình luận vào PR nếu có lỗi (chỉ chạy khi có Pull Request)
       - name: Comment on PR (Vulnerabilities Found)
-        if: failure()
+        if: failure() && github.event_name == 'pull_request'
         uses: actions/github-script@v6
         with:
           script: |
@@ -69,3 +73,10 @@ jobs:
               issue_number: context.payload.pull_request.number,
               body: 'Vulnerabilities detected. Please review the report.'
             })
+
+      # Bước 10: Thông báo nếu không có Pull Request (tùy chọn)
+      - name: Log result (No Pull Request)
+        if: github.event_name == 'push'
+        run: |
+          echo "Pipeline completed. Success: ${{ job.status == 'success' }}"
+          echo "No Pull Request available to comment on."
