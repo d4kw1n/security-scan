@@ -10,7 +10,7 @@ dotenv.config();
 
 const app = express();
 
-connectDB();
+// connectDB();
 
 app.use(express.static('./uploads'));
 app.use(cors());
