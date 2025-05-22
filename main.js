@@ -1,5 +1,21 @@
 const express = require('express');
 const app = express();
+const { Expression } = require('expr-eval');
+
+app.get('/eval', (req, res) => {
+    const code = req.query.code;
+    if (!code) {
+        return res.status(400).send('No code provided');
+    }
+    try {
+        const evaluator = new Expression(code);
+        const result = evaluator.evaluate();
+        res.send(`Result: ${result}`);
+    } catch (error) {
+        res.status(500).send(`Error: ${error.message}`);
+    }
+}
+);
 
 app.get('/', (req, res) => res.send('Hello World!'));
 
