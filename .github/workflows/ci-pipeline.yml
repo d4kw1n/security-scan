@@ -28,16 +28,24 @@ jobs:
         run: npm test
         continue-on-error: true
 
-      - name: Start Application
-        run: npm start &
-        env:
-          CI: true
+      - name: Wait for Application to be Ready
+        run: |
+          timeout 30s bash -c "while ! curl -s http://localhost:8000; do sleep 1; done"
+        continue-on-error: false
 
+      # Bước 9: Cấp quyền cho thư mục làm việc
+      - name: Grant permissions to working directory
+        run: |
+          chmod -R a+w /home/runner/work/security-scan/security-scan
+
+      # Bước 10: Chạy DAST với OWASP ZAP
       - name: Run OWASP ZAP
         uses: zaproxy/action-baseline@v0.12.0
         with:
           target: 'http://localhost:8000'
           fail_action: true
+          allow_issue_writing: false
+          artifact_name: zap-scan-report-${{ github.run_id }}
 
       # - name: SonarQube Scan
       #   id: sonar_scan
