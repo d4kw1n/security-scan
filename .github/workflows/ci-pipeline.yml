@@ -1,0 +1,162 @@
+name: SonarQube Cloud Scan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  sonarqube:
+    name: SonarQube Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Grant execute permission to jest
+        run: chmod +x ./node_modules/.bin/jest
+
+      - name: Run tests with coverage
+        run: npm test
+        continue-on-error: true
+
+      - name: SonarQube Scan
+        id: sonar_scan
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+        with:
+          args: >
+            -Dsonar.organization=d4kw1n
+            -Dsonar.projectKey=d4kw1n_security-scan
+            -Dsonar.sources=.
+            -Dsonar.sourceEncoding=UTF-8
+            -Dsonar.exclusions=node_modules/**,dist/**,coverage/**
+            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
+            -Dsonar.pullrequest.branch=${{ github.head_ref }}
+            -Dsonar.pullrequest.base=${{ github.base_ref }}
+            -Dsonar.qualitygate.wait=true
+        continue-on-error: true
+
+      - name: Check for Vulnerabilities and Analyze with Perplexity
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+
+          # Query SonarCloud API for vulnerabilities
+          echo "Github event ID: ${{github.event.pull_request.number}}"
+          response=$(curl -s -f -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED&pullRequest=${{ github.event.pull_request.number }}")
+          if [ $? -ne 0 ]; then
+            echo "❌ Failed to query SonarCloud API. Check SONAR_TOKEN or network. Response: $response"
+            exit 1
+          fi
+
+          # Extract vulnerabilities
+          vulnerabilities=$(echo "$response" | jq '.issues')
+          if [ $? -ne 0 ]; then
+            echo "❌ Failed to parse SonarCloud API response. Response: $response"
+            exit 1
+          fi
+
+          # Initialize comment
+          comment="⚠️ **SonarCloud Analysis Report**\n\n"
+
+          # Check if there are vulnerabilities or Quality Gate failed
+          if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ] || [ "${{ steps.sonar_scan.outcome }}" != "success" ]; then
+            if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
+              comment+="### Vulnerabilities Analysis by Perplexity\n"
+              # Loop through each vulnerability
+              echo "$vulnerabilities" | jq -r '.[] | @base64' | while read -r vuln_base64; do
+                vuln=$(echo "$vuln_base64" | base64 --decode)
+                rule=$(echo "$vuln" | jq -r '.rule')
+                message=$(echo "$vuln" | jq -r '.message')
+                severity=$(echo "$vuln" | jq -r '.severity')
+                file=$(echo "$vuln" | jq -r '.component')
+                line=$(echo "$vuln" | jq -r '.line // "N/A"')
+
+                # Create JSON payload with escaped fields
+                payload=$(jq -n \
+                  --arg rule "$rule" \
+                  --arg message "$message" \
+                  --arg severity "$severity" \
+                  --arg file "$file" \
+                  --arg line "$line" \
+                  '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: \($rule)\n- Message: \($message)\n- Severity: \($severity)\n- File: \($file)\n- Line: \($line)"}]}')
+
+                # Validate payload
+                if ! echo "$payload" | jq . >/dev/null 2>&1; then
+                  echo "❌ Invalid JSON payload for vulnerability: $rule. Payload: $payload"
+                  comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to create valid request for Perplexity.\n"
+                  continue
+                fi
+
+                # Log payload for debugging
+                echo "Sending payload to Perplexity for vulnerability: $rule"
+                echo "Payload: $payload"
+
+                # Call Perplexity API
+                api_response=$(curl -s -w "\n%{http_code}" -X POST \
+                  -H "Authorization: Bearer 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" \
+                  -H "Content-Type: application/json" \
+                  https://api.perplexity.ai/chat/completions \
+                  -d "$payload")
+                
+                # Split response and HTTP code
+                http_code=$(echo "$api_response" | tail -n1)
+                api_body=$(echo "$api_response" | sed '$d')
+
+                # Log API response for debugging
+                echo "Perplexity API response for vulnerability: $rule"
+                echo "HTTP Code: $http_code"
+                echo "Response Body: $api_body"
+
+                if [ "$http_code" != "200" ]; then
+                  echo "❌ Failed to get Perplexity analysis for vulnerability: $rule. HTTP Code: $http_code, Response: $api_body"
+                  comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Failed to retrieve analysis from Perplexity (HTTP $http_code: $api_body).\n"
+                else
+                  # Validate JSON response
+                  if ! echo "$api_body" | jq . >/dev/null 2>&1; then
+                    echo "❌ Invalid JSON response from Perplexity for vulnerability: $rule. Response: $api_body"
+                    comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: Invalid response from Perplexity.\n"
+                  else
+                    # Extract Perplexity analysis
+                    analysis=$(echo "$api_body" | jq -r '.choices[0].message.content // ""')
+                    if [ -z "$analysis" ]; then
+                      echo "❌ Empty or missing analysis in Perplexity response for vulnerability: $rule. Response: $api_body"
+                      comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis: No analysis provided by Perplexity.\n"
+                    else
+                      # Clean up analysis for PR comment (remove <think> tags and excessive newlines)
+                      clean_analysis=$(echo "$analysis" | sed '/<think>/,/<\/think>/d' | sed '/^$/N;/\n$/D')
+                      comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis:\n    $clean_analysis\n"
+                    fi
+                  fi
+                fi
+                # Add delay to avoid rate limiting
+                sleep 1
+              done
+            else
+              comment+="No vulnerabilities found, but Quality Gate failed due to other criteria (e.g., coverage).\n"
+            fi
+            comment+="\nPlease review and address these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=51) for details."
+
+            # Post comment to PR
+            echo -e "$comment" > comment.md
+            # gh pr comment 51 --body-file comment.md
+            exit 2 # Fail the workflow to block merge
+          else
+            echo "✅ No vulnerabilities found and Quality Gate passed. PR can be merged."
+            exit 0 # Success, allow merge
+          fi
+        continue-on-error: false
