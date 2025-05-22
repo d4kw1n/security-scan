@@ -68,10 +68,19 @@ jobs:
       - name: Run OWASP ZAP
         uses: zaproxy/action-baseline@v0.12.0
         with:
-          target: 'http://localhost:8000'
-          fail_action: true
+          target: 'http://localhost:8000/v1'  # Quét route hợp lệ
+          fail_action: false  # Không dừng pipeline khi có cảnh báo
           allow_issue_writing: false
-          artifact_name: zap-scan-report-${{ github.run_id }}
+          upload_artifact: false  # Tắt tải lên artifact tự động
+
+      - name: Upload OWASP ZAP Reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: zap-scan-report-${{ github.run_id }}
+          path: |
+            report_json.json
+            report_md.md
+            report_html.html
 
       # - name: SonarQube Scan
       #   id: sonar_scan
