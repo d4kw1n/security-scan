@@ -153,10 +153,12 @@ jobs:
                       # Include code snippet in PR comment
                       if [ "$code_snippet" != "\"Code snippet not available (file missing or line not specified).\"" ]; then
                         comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Code:\n    \`\`\`\n$(echo "$code_snippet" | jq -r .)\n    \`\`\`\n  - Analysis:\n    $clean_analysis\n"
-                        echo -e "$comment" >> comment.md
+                        echo -e "$comment" > comment.md
+                        gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
                       else
                         comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Code: Not available\n  - Analysis:\n    $clean_analysis\n"
-                        echo -e "$comment" >> comment.md
+                        echo -e "$comment" > comment.md
+                        gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
                       fi
                     fi
                   fi
