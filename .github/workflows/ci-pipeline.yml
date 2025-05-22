@@ -28,34 +28,48 @@ jobs:
         run: npm test
         continue-on-error: true
 
+      - name: Start MongoDB
+        run: |
+          docker run -d --name mongodb -p 27017:27017 mongo:latest
+
+      # Bước 7: Chờ MongoDB sẵn sàng
+      - name: Wait for MongoDB to be Ready
+        run: |
+          timeout 60s bash -c "until docker exec mongodb mongosh --eval 'db.stats()' --quiet; do sleep 1; done"
+
+      # Bước 8: Khởi động ứng dụng
       - name: Start Application
         run: npm start > app.log 2>&1 &
         env:
           CI: true
+          PORT: 8000
+          MONGODB_URL: mongodb://localhost:27017/course
+          KEY_ACCESS_TOKEN_JWT: abc
+          KEY_REFRESH_TOKEN_JWT: abc
 
-      # Bước 8: Kiểm tra port 8000
+      # Bước 9: Kiểm tra port 8000
       - name: Check if port 8000 is listening
         run: |
           sudo apt-get update && sudo apt-get install -y lsof
           lsof -i :8000 || echo "Port 8000 is not listening"
 
-      # Bước 9: Kiểm tra log ứng dụng (nếu cần)
+      # Bước 10: Kiểm tra log ứng dụng
       - name: Debug Application Log
         if: failure()
         run: cat app.log
 
-      # Bước 10: Kiểm tra ứng dụng sẵn sàng
+      # Bước 11: Kiểm tra ứng dụng sẵn sàng
       - name: Wait for Application to be Ready
         run: |
-          timeout 60s bash -c "while ! curl -s -f http://localhost:8000; do sleep 1; done"
+          timeout 60s bash -c "while ! curl -s -f http://localhost:8000/v1; do sleep 1; done"
         continue-on-error: false
 
-      # Bước 11: Cấp quyền cho thư mục làm việc
+      # Bước 12: Cấp quyền cho thư mục làm việc
       - name: Grant permissions to working directory
         run: |
           chmod -R a+w /home/runner/work/security-scan/security-scan
 
-      # Bước 12: Chạy DAST với OWASP ZAP
+      # Bước 13: Chạy DAST với OWASP ZAP
       - name: Run OWASP ZAP
         uses: zaproxy/action-baseline@v0.12.0
         with:
