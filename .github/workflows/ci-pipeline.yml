@@ -58,11 +58,6 @@ jobs:
         if: failure()
         run: cat app.log
 
-      # Bước 11: Kiểm tra ứng dụng sẵn sàng
-      - name: Wait for Application to be Ready
-        run: |
-          timeout 60s bash -c "while ! curl -s -f http://localhost:8000/v1; do sleep 1; done"
-        continue-on-error: false
 
       # Bước 12: Cấp quyền cho thư mục làm việc
       - name: Grant permissions to working directory
