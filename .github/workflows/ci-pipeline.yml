@@ -55,8 +55,7 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y jq
 
-          # Query SonarCloud API for vulnerabilities
-          echo "Github event ID: ${{ github.event.pull_request.number }}"
+          # echo "Github event ID: ${{ github.event.pull_request.number }}"
           response=$(curl -s -f -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED&pullRequest=${{ github.event.pull_request.number }}")
           if [ $? -ne 0 ]; then
             echo "❌ Failed to query SonarCloud API. Check SONAR_TOKEN or network. Response: $response"
@@ -77,7 +76,7 @@ jobs:
           # Check if there are vulnerabilities or Quality Gate failed
           if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ] || [ "${{ steps.sonar_scan.outcome }}" != "success" ]; then
             if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
-              comment+="### Vulnerabilities Analysis by Perplexity\n"
+              comment="### Vulnerabilities Analysis by Perplexity\n"
               # Loop through each vulnerability
               echo "$vulnerabilities" | jq -r '.[] | @base64' | while read -r vuln_base64; do
                 vuln=$(echo "$vuln_base64" | base64 --decode)
