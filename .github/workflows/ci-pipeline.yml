@@ -140,6 +140,7 @@ jobs:
                       # Clean up analysis for PR comment (remove <think> tags and excessive newlines)
                       clean_analysis=$(echo "$analysis" | sed '/<think>/,/<\/think>/d' | sed '/^$/N;/\n$/D')
                       comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Analysis:\n    $clean_analysis\n"
+                      echo -e "$comment" > comment.md
                     fi
                   fi
                 fi
@@ -152,7 +153,7 @@ jobs:
             comment+="\nPlease review and address these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details."
 
             # Post comment to PR
-            echo -e "$comment" > comment.md
+            echo -e "$comment" >> comment.md
             gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
             exit 1 # Fail the workflow to block merge
           else
