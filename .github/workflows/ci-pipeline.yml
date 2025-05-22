@@ -28,17 +28,34 @@ jobs:
         run: npm test
         continue-on-error: true
 
+      - name: Start Application
+        run: npm start > app.log 2>&1 &
+        env:
+          CI: true
+
+      # Bước 8: Kiểm tra port 8000
+      - name: Check if port 8000 is listening
+        run: |
+          sudo apt-get update && sudo apt-get install -y lsof
+          lsof -i :8000 || echo "Port 8000 is not listening"
+
+      # Bước 9: Kiểm tra log ứng dụng (nếu cần)
+      - name: Debug Application Log
+        if: failure()
+        run: cat app.log
+
+      # Bước 10: Kiểm tra ứng dụng sẵn sàng
       - name: Wait for Application to be Ready
         run: |
-          timeout 30s bash -c "while ! curl -s http://localhost:8000; do sleep 1; done"
+          timeout 60s bash -c "while ! curl -s -f http://localhost:8000; do sleep 1; done"
         continue-on-error: false
 
-      # Bước 9: Cấp quyền cho thư mục làm việc
+      # Bước 11: Cấp quyền cho thư mục làm việc
       - name: Grant permissions to working directory
         run: |
           chmod -R a+w /home/runner/work/security-scan/security-scan
 
-      # Bước 10: Chạy DAST với OWASP ZAP
+      # Bước 12: Chạy DAST với OWASP ZAP
       - name: Run OWASP ZAP
         uses: zaproxy/action-baseline@v0.12.0
         with:
