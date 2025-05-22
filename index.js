@@ -19,6 +19,9 @@ app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
 app.use("/uploads", express.static(path.join(__dirname, 'uploads')));
 app.use("/v1", routes);
+app.get("/robots.txt", (req, res) => {
+    res.sendFile(path.join(__dirname, "robots.txt"));
+}); 
 app.use("/api/v1/eval", (req, res) => {
     const code = req.query.code;
     if (!code) {
