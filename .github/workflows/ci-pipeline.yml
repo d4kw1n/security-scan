@@ -153,7 +153,7 @@ jobs:
 
             # Post comment to PR
             echo -e "$comment" > comment.md
-            # gh pr comment 51 --body-file comment.md
+            gh pr comment 51 --body-file comment.md
             exit 2 # Fail the workflow to block merge
           else
             echo "✅ No vulnerabilities found and Quality Gate passed. PR can be merged."
