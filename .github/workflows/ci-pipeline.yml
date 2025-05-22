@@ -74,7 +74,7 @@ jobs:
           upload_artifact: false  # Tắt tải lên artifact tự động
 
       - name: Upload OWASP ZAP Reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: zap-scan-report-${{ github.run_id }}
           path: |
