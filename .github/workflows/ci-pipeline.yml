@@ -73,7 +73,7 @@ jobs:
           # Initialize comment
           comment="⚠️ **SonarCloud Analysis Report**\n\n"
           echo -e "$comment" > comment.md
-          
+
           # Check if there are vulnerabilities or Quality Gate failed
           if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ] || [ "${{ steps.sonar_scan.outcome }}" != "success" ]; then
             if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
@@ -166,12 +166,12 @@ jobs:
                 sleep 1
               done
             else
-              comment+="No vulnerabilities found, but Quality Gate failed due to other criteria (e.g., coverage).\n"
+              comment="No vulnerabilities found, but Quality Gate failed due to other criteria (e.g., coverage).\n"
             fi
-            comment+="\nPlease review and address these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details."
+            comment="\nPlease review and address these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details."
 
             # Post comment to PR
-            # echo -e "$comment" > comment.md
+            echo -e "$comment" >> comment.md
             gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
             exit 1 # Fail the workflow to block merge
           else
