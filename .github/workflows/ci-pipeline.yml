@@ -108,7 +108,7 @@ jobs:
 
                 # Call Perplexity API
                 api_response=$(curl -s -w "\n%{http_code}" -X POST \
-                  -H "Authorization: Bearer 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" \
+                  -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
                   -H "Content-Type: application/json" \
                   https://api.perplexity.ai/chat/completions \
                   -d "$payload")
@@ -149,12 +149,12 @@ jobs:
             else
               comment+="No vulnerabilities found, but Quality Gate failed due to other criteria (e.g., coverage).\n"
             fi
-            comment+="\nPlease review and address these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=51) for details."
+            comment+="\nPlease review and address these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details."
 
             # Post comment to PR
             echo -e "$comment" > comment.md
-            gh pr comment 51 --body-file comment.md
-            exit 2 # Fail the workflow to block merge
+            gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
+            exit 1 # Fail the workflow to block merge
           else
             echo "✅ No vulnerabilities found and Quality Gate passed. PR can be merged."
             exit 0 # Success, allow merge
