@@ -1,45 +1,47 @@
-name: SonarQube Cloud Scan
+name: Security Audit
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
-    types: [opened, synchronize, reopened]
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 * * *' # Chạy hàng ngày lúc 00:00 UTC
 
 jobs:
-  sonarqube:
-    name: SonarQube Scan
+  audit:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Set up Node.js
+    steps:
+      # Checkout mã nguồn
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Cài đặt Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20' # Sử dụng Node.js 20 để tương thích với image
 
+      # Cài đặt phụ thuộc
       - name: Install dependencies
-        run: npm install
-
-      - name: Grant execute permission to jest
-        run: chmod +x ./node_modules/.bin/jest
-
-      - name: Run tests with coverage
-        run: npm test
-        continue-on-error: true
+        run: npm ci
 
       # Chạy npm audit bằng Docker container
       - name: Run npm audit
         run: |
           docker run --rm -v $(pwd):/app d4kw1n/npm-audit:latest > audit-report.json
 
+      # Lưu kết quả audit
       - name: Upload audit report
         uses: actions/upload-artifact@v4
         with:
           name: npm-audit-report
           path: audit-report.json
 
-      # (Tùy chọn) Kiểm tra và báo lỗi nếu có lỗ hổng nghiêm trọng
+      # Kiểm tra và báo lỗi nếu có lỗ hổng nghiêm trọng
       - name: Check for critical vulnerabilities
         run: |
           if jq -e '.metadata.vulnerabilities.critical > 0' audit-report.json; then
