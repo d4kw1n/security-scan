@@ -1,0 +1,6 @@
+{
+    "name": "npm-audit-container",
+    "version": "1.0.0",
+    "description": "Docker container for npm audit",
+    "dependencies": {}
+}

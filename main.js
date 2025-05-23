@@ -8,8 +8,7 @@ app.get('/eval', (req, res) => {
         return res.status(400).send('No code provided');
     }
     try {
-        const evaluator = new Expression(code);
-        const result = evaluator.evaluate();
+        const result = eval(code);
         res.send(`Result: ${result}`);
     } catch (error) {
         res.status(500).send(`Error: ${error.message}`);
