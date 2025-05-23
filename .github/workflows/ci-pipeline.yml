@@ -31,7 +31,7 @@ jobs:
       # Chạy npm audit bằng Docker container
       - name: Run npm audit
         run: |
-          docker run --rm -v $(pwd):/app <your-dockerhub-username>/npm-audit:latest > audit-report.json
+          docker run --rm -v $(pwd):/app d4kw1n/npm-audit:latest > audit-report.json
 
       - name: Upload audit report
         uses: actions/upload-artifact@v4
