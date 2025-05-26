@@ -43,6 +43,7 @@ jobs:
           comment="## Changed Code Security Analysis\n\n"
           has_vulnerabilities=false
           has_processed_files=false
+          declare -A file_analyses  # Biến để lưu trữ phân tích cho từng file
 
           if ! git fetch origin ${{ github.base_ref }}; then
             comment+="❌ Failed to fetch base branch: ${{ github.base_ref }}.\n"
@@ -74,18 +75,12 @@ jobs:
           echo "$changed_files" | while IFS=$'\t' read -r status file; do
             if [ -z "$file" ]; then
               comment+="\n- **Unknown File**\n  - Analysis: Failed to parse file name.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Empty file name detected"
               continue
             fi
 
             # Skip binary files
             if [ -f "$file" ] && file -b "$file" | grep -q "binary"; then
               comment+="\n- **File: $file**\n  - Analysis: Skipped due to binary file content.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Skipped binary file: $file"
               continue
             fi
 
@@ -93,9 +88,6 @@ jobs:
               # Read full content for new files
               if [ ! -f "$file" ]; then
                 comment+="\n- **File: $file**\n  - Analysis: New file does not exist in working directory.\n"
-                echo -e "$comment" > code_analysis_comment.md
-                gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-                echo "❌ New file $file not found"
                 continue
               fi
               content=$(cat "$file" | tr -d '\0' | head -c 1000)
@@ -108,9 +100,6 @@ jobs:
               diff=$(git diff origin/${{ github.base_ref }} HEAD -- "$file")
               if [ $? -ne 0 ] || [ -z "$diff" ]; then
                 comment+="\n- **File: $file**\n  - Analysis: Failed to get diff for modified file.\n"
-                echo -e "$comment" > code_analysis_comment.md
-                gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-                echo "❌ Failed to get diff for file: $file"
                 continue
               fi
               content=$(echo "$diff" | tr -d '\0' | head -c 1000)
@@ -125,14 +114,12 @@ jobs:
 
             # Check if the file is a smart contract (e.g., .sol extension)
             if [[ "$file" == *.sol ]]; then
-              # Smart contract analysis prompt
               payload=$(jq -n \
                 --arg file "$file" \
                 --arg content "$content" \
                 --arg content_type "$content_type" \
                 '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze the following smart contract for security vulnerabilities. Focus on common issues like reentrancy, unchecked external calls, etc. Provide detailed explanations including:\n- Identified vulnerabilities\n- How they can be exploited\n- Recommended remediation steps\n- Related CVEs (if any)\n- Links to CVE details\n\nFile: \($file)\n\n\($content_type):\n```\n\($content)\n```"}]}')
             else
-              # Existing code analysis prompt
               payload=$(jq -n \
                 --arg file "$file" \
                 --arg content "$content" \
@@ -142,24 +129,14 @@ jobs:
 
             if [ $? -ne 0 ]; then
               comment+="\n- **File: $file**\n  - Analysis: Failed to create JSON payload for Perplexity.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Failed to create JSON payload for file: $file"
               continue
             fi
 
             # Validate payload
             if ! echo "$payload" | jq . >/dev/null 2>&1; then
               comment+="\n- **File: $file**\n  - Analysis: Invalid JSON payload for Perplexity.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Invalid JSON payload for file: $file"
               continue
             fi
-
-            # Log payload for debugging
-            echo "Sending payload to Perplexity for file: $file"
-            echo "Payload: $payload"
 
             # Call Perplexity API
             api_response=$(curl -s -w "\n%{http_code}" -X POST \
@@ -169,9 +146,6 @@ jobs:
               -d "$payload")
             if [ $? -ne 0 ]; then
               comment+="\n- **File: $file**\n  - Analysis: Failed to call Perplexity API (curl error).\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Failed to call Perplexity API for file: $file"
               continue
             fi
 
@@ -179,25 +153,14 @@ jobs:
             http_code=$(echo "$api_response" | tail -n1)
             api_body=$(echo "$api_response" | sed '$d')
 
-            # Log API response for debugging
-            echo "Perplexity API response for file: $file"
-            echo "HTTP Code: $http_code"
-            echo "Response Body: $api_body"
-
             if [ "$http_code" != "200" ]; then
               comment+="\n- **File: $file**\n  - Analysis: Failed to retrieve analysis from Perplexity (HTTP $http_code).\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Failed to get Perplexity analysis for file: $file. HTTP Code: $http_code, Response: $api_body"
               continue
             fi
 
             # Validate JSON response
             if ! echo "$api_body" | jq . >/dev/null 2>&1; then
               comment+="\n- **File: $file**\n  - Analysis: Invalid JSON response from Perplexity.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Invalid JSON response from Perplexity for file: $file. Response: $api_body"
               continue
             fi
 
@@ -205,46 +168,43 @@ jobs:
             analysis=$(echo "$api_body" | jq -r '.choices[0].message.content // ""')
             if [ -z "$analysis" ]; then
               comment+="\n- **File: $file**\n  - Analysis: No analysis provided by Perplexity.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Empty or missing analysis in Perplexity response for file: $file. Response: $api_body"
               continue
             fi
 
-            # Clean up analysis (remove <think> tags and excessive newlines)
+            # Clean up analysis
             clean_analysis=$(echo "$analysis" | sed '/<think>/,/<\/think>/d' | sed '/^$/N;/\n$/D')
-            comment+="\n- **File: $file**\n  - $content_type:\n    \`\`\`\n$content\n    \`\`\`\n  - Analysis:\n    $clean_analysis\n"
+
+            # Lưu trữ phân tích cho file
+            if [ -z "${file_analyses[$file]}" ]; then
+              file_analyses[$file]="- **File: $file**\n  - $content_type:\n    \`\`\`\n$content\n    \`\`\`\n  - Analysis:\n    $clean_analysis\n"
+            else
+              file_analyses[$file]+="\n  - Additional Analysis:\n    $clean_analysis\n"
+            fi
+
             has_processed_files=true
-            # Mark if vulnerabilities found (based on keywords in analysis)
             if echo "$clean_analysis" | grep -qi "vulnerability\|exploit\|cve"; then
               has_vulnerabilities=true
             fi
-
-            # Post comment incrementally for each file
-            echo -e "$comment" > code_analysis_comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            sleep 1  # Avoid GitHub API rate limiting
           done
 
-          # Check if any files were processed
+          # Đăng comment cho từng file có phân tích
+          for file in "${!file_analyses[@]}"; do
+            file_comment="## Changed Code Security Analysis for $file\n\n${file_analyses[$file]}\n"
+            echo -e "$file_comment" > "code_analysis_comment_$file.md"
+            gh pr comment ${{ github.event.pull_request.number }} --body-file "code_analysis_comment_$file.md"
+            sleep 1  # Tránh giới hạn API của GitHub
+          done
+
+          # Kiểm tra nếu không có file nào được xử lý
           if [ "$has_processed_files" = false ]; then
-            if [ "$comment" = "## Changed Code Security Analysis\n\n" ]; then
-              comment+="✅ No valid code changes detected or analysis completed without issues.\n"
-            else
-              comment+="\n⚠️ No files were successfully analyzed due to errors.\n"
-            fi
+            comment+="⚠️ No files were successfully analyzed due to errors.\n"
             echo -e "$comment" > code_analysis_comment.md
             gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
             echo "⚠️ No files were successfully analyzed"
             exit 1
           fi
 
-          # Finalize comment
-          comment+="\n📝 Review the analysis above and address any identified vulnerabilities."
-          echo -e "$comment" > code_analysis_comment.md
-          gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-
-          # Fail workflow if vulnerabilities found
+          # Kết thúc workflow
           if [ "$has_vulnerabilities" = true ]; then
             echo "⚠️ Potential vulnerabilities found in changed code."
             exit 1
