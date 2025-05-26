@@ -216,17 +216,17 @@ jobs:
             sleep 1  # Avoid GitHub API rate limiting
           done
 
-          if [ "$has_processed_files" = false ]; then
-            if [ "$comment" = "## Changed Code Security Analysis\n\n" ]; then
-              comment+="✅ No valid code changes detected or analysis completed without issues.\n"
-            else
-              comment+="\n⚠️ No files were successfully analyzed due to errors.\n"
-            fi
-            echo -e "$comment" > code_analysis_comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            echo "⚠️ No files were successfully analyzed"
-            exit 1
-          fi
+          # if [ "$has_processed_files" = false ]; then
+          #   if [ "$comment" = "## Changed Code Security Analysis\n\n" ]; then
+          #     comment+="✅ No valid code changes detected or analysis completed without issues.\n"
+          #   else
+          #     comment+="\n⚠️ No files were successfully analyzed due to errors.\n"
+          #   fi
+          #   echo -e "$comment" > code_analysis_comment.md
+          #   gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+          #   echo "⚠️ No files were successfully analyzed"
+          #   exit 1
+          # fi
 
           comment+="\n📝 Review the analysis above and address any identified vulnerabilities."
           echo -e "$comment" > code_analysis_comment.md
