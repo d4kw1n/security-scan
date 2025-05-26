@@ -10,12 +10,6 @@ on:
       - 'scripts/**'
   pull_request:
     types: [opened, synchronize, reopened]
-    branches:
-      - main
-      - develop
-    paths:
-      - 'contracts/**'
-      - 'scripts/**'
 
 jobs:
   security-scan:
