@@ -2,7 +2,7 @@ const express = require('express');
 const app = express();
 const { Expression } = require('expr-eval');
 
-app.get('/eval', (req, res) => {
+app.get('/eval1', (req, res) => {
     const code = req.query.code;
     if (!code) {
         return res.status(400).send('No code provided');
