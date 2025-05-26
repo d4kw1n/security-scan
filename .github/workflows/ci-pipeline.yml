@@ -231,14 +231,14 @@ jobs:
           comment+="\n📝 Review the analysis above and address any identified vulnerabilities."
           echo -e "$comment" > code_analysis_comment.md
           gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-
-          if [ "$has_vulnerabilities" = true ]; then
-            echo "⚠️ Potential vulnerabilities found in changed code."
-            exit 1
-          else
-            echo "✅ No vulnerabilities detected in changed code."
-            exit 0
-          fi
+          exit 1
+          # if [ "$has_vulnerabilities" = true ]; then
+          #   echo "⚠️ Potential vulnerabilities found in changed code."
+          #   exit 1
+          # else
+          #   echo "✅ No vulnerabilities detected in changed code."
+          #   exit 0
+          # fi
         continue-on-error: true
 
       ####################################### Setup #########################################################
