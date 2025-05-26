@@ -1,19 +1,13 @@
-name: Smart Contract Security Scan
+name: SonarQube Cloud Scan
 
 on:
   pull_request:
-    branches:
-      - main
-      - develop
-    paths:
-      - 'contracts/**'
-      - 'test/**'
-      - 'scripts/**'
+    types: [opened, synchronize, reopened]
 
 jobs:
-  security-scan:
+  sonarqube:
+    name: SonarQube Scan
     runs-on: ubuntu-latest
-    
     steps:
       # Bước 1: Checkout code
       - name: Checkout repository
