@@ -1,13 +1,19 @@
-name: SonarQube Cloud Scan
+name: Smart Contract Security Scan
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - develop
+    paths:
+      - 'contracts/**'
+      - 'test/**'
+      - 'scripts/**'
 
 jobs:
-  sonarqube:
-    name: SonarQube Scan
+  security-scan:
     runs-on: ubuntu-latest
+    
     steps:
       # Bước 1: Checkout code
       - name: Checkout repository
@@ -29,11 +35,17 @@ jobs:
 
       # Bước 4: Chạy phân tích Slither
       - name: Run Slither Analysis
+        id: slither
         run: |
-          slither . --exclude-low --exclude-informational \
+          if slither . --exclude-low --exclude-informational \
             --checklist \
             --filter-paths "test|mocks" \
-            --json slither-report.json
+            --json slither-report.json; then
+            echo "Slither ran successfully"
+          else
+            echo "Slither failed, but continuing"
+            echo '{"success": false, "results": {"detectors": []}}' > slither-report.json
+          fi
         continue-on-error: true
 
       # Bước 5: Tải lên báo cáo Slither
@@ -50,16 +62,25 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const report = JSON.parse(fs.readFileSync('slither-report.json', 'utf8'));
-            
             let comment = '## Slither Security Scan Results\n\n';
-            if (report.success && report.results.detectors.length === 0) {
-              comment += '✅ No security issues found!';
-            } else {
-              comment += '⚠️ Potential security issues detected:\n';
-              report.results.detectors.forEach(detector => {
-                comment += `- ${detector.description}\n  - Impact: ${detector.impact}\n  - Confidence: ${detector.confidence}\n`;
-              });
+            
+            try {
+              const report = JSON.parse(fs.readFileSync('slither-report.json', 'utf8'));
+              
+              if (!report.success) {
+                comment += '⚠️ Slither analysis failed. Please check the logs and uploaded report for details.';
+              } else if (report.results && report.results.detectors && report.results.detectors.length === 0) {
+                comment += '✅ No security issues found!';
+              } else if (report.results && report.results.detectors) {
+                comment += '⚠️ Potential security issues detected:\n';
+                report.results.detectors.forEach(detector => {
+                  comment += `- ${detector.description}\n  - Impact: ${detector.impact}\n  - Confidence: ${detector.confidence}\n`;
+                });
+              } else {
+                comment += '⚠️ Invalid report format. Please check the Slither configuration.';
+              }
+            } catch (error) {
+              comment += `⚠️ Error processing Slither report: ${error.message}`;
             }
             
             github.rest.issues.createComment({
