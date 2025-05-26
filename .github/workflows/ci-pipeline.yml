@@ -18,6 +18,9 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install dependencies
+        run: npm ci
+        continue-on-error: true
 
       - name: Grant execute permission to jest
         run: chmod +x ./node_modules/.bin/jest
@@ -38,6 +41,63 @@ jobs:
           name: npm-audit-report
           path: audit-report.json
         if: always()
+
+      - name: Comment npm audit results on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            let auditReport;
+            try {
+              auditReport = JSON.parse(fs.readFileSync('audit-report.json', 'utf8'));
+            } catch (error) {
+              auditReport = { error: 'Failed to parse audit-report.json: ' + error.message };
+            }
+
+            let commentBody = '## npm audit Results\n\n';
+            if (auditReport.error) {
+              commentBody += `❌ Error: ${auditReport.error}\n`;
+            } else if (!auditReport.vulnerabilities || Object.keys(auditReport.vulnerabilities).length === 0) {
+              commentBody += '✅ No vulnerabilities found.\n';
+            } else {
+              const vulnCount = auditReport.metadata.vulnerabilities;
+              commentBody += `⚠️ Found ${Object.keys(auditReport.vulnerabilities).length} vulnerabilities:\n`;
+              commentBody += `- Critical: ${vulnCount.critical}\n`;
+              commentBody += `- High: ${vulnCount.high}\n`;
+              commentBody += `- Moderate: ${vulnCount.moderate}\n`;
+              commentBody += `- Low: ${vulnCount.low}\n\n`;
+              commentBody += '### Details\n';
+
+              for (const [pkg, vuln] of Object.entries(auditReport.vulnerabilities)) {
+                commentBody += `- **${pkg}** (Severity: ${vuln.severity.toUpperCase()})\n`;
+                if (vuln.via && vuln.via.length > 0) {
+                  const cves = vuln.via
+                    .filter(v => v.cve)
+                    .map(v => v.cve)
+                    .join(', ');
+                  commentBody += `  - CVEs: ${cves || 'None'}\n`;
+                  const descriptions = vuln.via
+                    .filter(v => v.title)
+                    .map(v => v.title)
+                    .join('; ');
+                  commentBody += `  - Description: ${descriptions || 'No description available'}\n`;
+                }
+                if (vuln.fixAvailable) {
+                  commentBody += `  - Fix: Run \`npm audit fix\` or update to ${vuln.fixAvailable.toVersion || 'latest'}\n`;
+                }
+                commentBody += '\n';
+              }
+              commentBody += '📝 Full details in the `npm-audit-report` artifact.\n';
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
 
       - name: Check for critical vulnerabilities
         run: |
