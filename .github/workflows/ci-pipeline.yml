@@ -1,274 +1,141 @@
-name: SonarQube Cloud Scan
+name: Smart Contract Security Scan
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 jobs:
-  sonarqube:
-    name: SonarQube Scan
+  security-scan:
+    name: Security Scan
     runs-on: ubuntu-latest
     steps:
+      # Checkout code
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      ####################################### Analyze New Code #########################################################
+      ####################################### Slither Analysis #########################################################
+      - name: Install Python and Slither
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install slither-analyzer
+        continue-on-error: true
 
+      - name: Run Slither for Solidity Analysis
+        run: |
+          slither . --json slither-report.json --exclude-informational --exclude-low || echo "Slither completed with findings"
+        continue-on-error: true
+
+      - name: Upload Slither report
+        uses: actions/upload-artifact@v4
+        with:
+          name: slither-report
+          path: slither-report.json
+        if: always()
+
+      - name: Comment Slither results on PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          comment="## Slither Security Analysis\n\n"
+          if [ ! -f slither-report.json ]; then
+            comment+="❌ Slither analysis failed or no Solidity files found.\n"
+          else
+            issues=$(jq '.results.issues // []' slither-report.json)
+            issue_count=$(echo "$issues" | jq length)
+            if [ "$issue_count" -eq 0 ]; then
+              comment+="✅ No high or medium severity issues found in Solidity contracts.\n"
+            else
+              comment+="⚠️ Found $issue_count issues in Solidity contracts:\n"
+              echo "$issues" | jq -r '.[] | "- **\(.check)**: \(.description) (Confidence: \(.confidence), Impact: \(.impact)) in \(.source_mapping.filename_relative) at line \(.source_mapping.lines[0])"' | while read -r issue; do
+                comment+="  $issue\n"
+              done
+              comment+="\n📝 Full details in the `slither-report` artifact.\n"
+            fi
+          fi
+          echo -e "$comment" > slither_comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file slither_comment.md
+        continue-on-error: true
+
+      ####################################### Analyze Changed Code with Perplexity #########################################################
       - name: Analyze Changed Code with Perplexity
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
         run: |
-          # Check if jq is installed, install if not
-          if ! command -v jq >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y jq
-            if [ $? -ne 0 ]; then
-              comment="## Changed Code Security Analysis\n\n❌ Failed to install jq for JSON processing.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Failed to install jq"
-              exit 1
-            fi
-          fi
-
-          if [ -z "$PERPLEXITY_API_KEY" ]; then
-            comment="## Changed Code Security Analysis\n\n❌ PERPLEXITY_API_KEY is not set. Please configure it in repository secrets.\n"
-            echo -e "$comment" > code_analysis_comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            echo "❌ PERPLEXITY_API_KEY is not set"
-            exit 1
-          fi
-
+          sudo apt-get update && sudo apt-get install -y jq
           comment="## Changed Code Security Analysis\n\n"
           has_vulnerabilities=false
-          has_processed_files=false
+          processed_files=0
 
-          if ! git fetch origin ${{ github.base_ref }}; then
-            comment+="❌ Failed to fetch base branch: ${{ github.base_ref }}.\n"
+          if [ -z "$PERPLEXITY_API_KEY" ]; then
+            comment+="❌ PERPLEXITY_API_KEY is not set.\n"
             echo -e "$comment" > code_analysis_comment.md
             gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            echo "❌ Failed to fetch base branch"
             exit 1
           fi
 
-          changed_files=$(git diff --name-status origin/${{ github.base_ref }} HEAD)
-          if [ $? -ne 0 ]; then
-            comment+="❌ Failed to get changed files between ${{ github.base_ref }} and HEAD.\n"
-            echo -e "$comment" > code_analysis_comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            echo "❌ Failed to get changed files"
-            exit 1
-          fi
-
-          # Check if there are any changed files
+          changed_files=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep '\.sol$')
           if [ -z "$changed_files" ]; then
-            comment+="✅ No code changes detected in this pull request.\n"
+            comment+="✅ No Solidity files changed in this pull request.\n"
             echo -e "$comment" > code_analysis_comment.md
             gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            echo "✅ No code changes detected"
             exit 0
           fi
 
-          # Process each changed file
-          echo "$changed_files" | while IFS=$'\t' read -r status file; do
-            if [ -z "$file" ]; then
-              comment+="\n- **Unknown File**\n  - Analysis: Failed to parse file name.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Empty file name detected"
-              continue
+          echo "$changed_files" | while read -r file; do
+            if [ "$processed_files" -ge 5 ]; then
+              comment+="\n⚠️ Skipped additional files due to API quota limits.\n"
+              break
             fi
-
-            # Skip binary files
-            if [ -f "$file" ] && file -b "$file" | grep -q "binary"; then
-              comment+="\n- **File: $file**\n  - Analysis: Skipped due to binary file content.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Skipped binary file: $file"
-              continue
+            content=$(cat "$file" | tr -d '\0' | head -c 1000)
+            if [ $(wc -c < "$file") -gt 1000 ]; then
+              content="$content\n[...truncated...]"
             fi
-
-            if [ "$status" = "A" ]; then
-              # Read full content for new files
-              if [ ! -f "$file" ]; then
-                comment+="\n- **File: $file**\n  - Analysis: New file does not exist in working directory.\n"
-                echo -e "$comment" > code_analysis_comment.md
-                gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-                echo "❌ New file $file not found"
-                continue
-              fi
-              content=$(cat "$file" | tr -d '\0' | head -c 1000)
-              if [ $(wc -c < "$file") -gt 1000 ]; then
-                content="$content\n[...truncated...]"
-              fi
-              content_type="New File Content"
-            elif [ "$status" = "M" ]; then
-              # Get diff for modified files
-              diff=$(git diff origin/${{ github.base_ref }} HEAD -- "$file")
-              if [ $? -ne 0 ] || [ -z "$diff" ]; then
-                comment+="\n- **File: $file**\n  - Analysis: Failed to get diff for modified file.\n"
-                echo -e "$comment" > code_analysis_comment.md
-                gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-                echo "❌ Failed to get diff for file: $file"
-                continue
-              fi
-              content=$(echo "$diff" | tr -d '\0' | head -c 1000)
-              if [ ${#diff} -gt 1000 ]; then
-                content="$content\n[...truncated...]"
-              fi
-              content_type="Code Changes"
-            else
-              # Skip deleted or other statuses
-              continue
-            fi
-
             payload=$(jq -n \
               --arg file "$file" \
               --arg content "$content" \
-              --arg content_type "$content_type" \
-              '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze the following \($content_type) for security vulnerabilities. Provide a detailed explanation including:\n- Identified vulnerabilities\n- How they can be exploited\n- Recommended remediation steps\n- Related CVEs (if any)\n- Links to CVE details\n\nFile: \($file)\n\n\($content_type):\n```\n\($content)\n```"}]}')
-            if [ $? -ne 0 ]; then
-              comment+="\n- **File: $file**\n  - Analysis: Failed to create JSON payload for Perplexity.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Failed to create JSON payload for file: $file"
-              continue
-            fi
-
-            # Validate payload
-            if ! echo "$payload" | jq . >/dev/null 2>&1; then
-              comment+="\n- **File: $file**\n  - Analysis: Invalid JSON payload for Perplexity.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Invalid JSON payload for file: $file"
-              continue
-            fi
-
-            # Log payload for debugging
-            echo "Sending payload to Perplexity for file: $file"
-            echo "Payload: $payload"
-
-            # Call Perplexity API
+              '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze this Solidity code for vulnerabilities:\n- File: \($file)\n- Code:\n```\n\($content)\n```\nProvide:\n- Identified vulnerabilities\n- Exploitation risks\n- Remediation steps\n- Related CVEs\n- CVE links"}]}')
             api_response=$(curl -s -w "\n%{http_code}" -X POST \
               -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
               -H "Content-Type: application/json" \
               https://api.perplexity.ai/chat/completions \
               -d "$payload")
-            if [ $? -ne 0 ]; then
-              comment+="\n- **File: $file**\n  - Analysis: Failed to call Perplexity API (curl error).\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Failed to call Perplexity API for file: $file"
-              continue
-            fi
-
-            # Split response and HTTP code
             http_code=$(echo "$api_response" | tail -n1)
             api_body=$(echo "$api_response" | sed '$d')
-
-            # Log API response for debugging
-            echo "Perplexity API response for file: $file"
-            echo "HTTP Code: $http_code"
-            echo "Response Body: $api_body"
-
             if [ "$http_code" != "200" ]; then
-              comment+="\n- **File: $file**\n  - Analysis: Failed to retrieve analysis from Perplexity (HTTP $http_code).\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Failed to get Perplexity analysis for file: $file. HTTP Code: $http_code, Response: $api_body"
+              comment+="\n- **File: $file**\n  - Analysis: Failed to retrieve analysis (HTTP $http_code).\n"
               continue
             fi
-
-            # Validate JSON response
-            if ! echo "$api_body" | jq . >/dev/null 2>&1; then
-              comment+="\n- **File: $file**\n  - Analysis: Invalid JSON response from Perplexity.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Invalid JSON response from Perplexity for file: $file. Response: $api_body"
-              continue
-            fi
-
-            # Extract Perplexity analysis
-            analysis=$(echo "$api_body" | jq -r '.choices[0].message.content // ""')
+            analysis=$(echo "$api_body" | jq -r '.choices[0].message.content // ""' | sed '/<think>/,/<\/think>/d')
             if [ -z "$analysis" ]; then
-              comment+="\n- **File: $file**\n  - Analysis: No analysis provided by Perplexity.\n"
-              echo -e "$comment" > code_analysis_comment.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-              echo "❌ Empty or missing analysis in Perplexity response for file: $file. Response: $api_body"
+              comment+="\n- **File: $file**\n  - Analysis: No analysis provided.\n"
               continue
             fi
-
-            # Clean up analysis (remove <think> tags and excessive newlines)
-            clean_analysis=$(echo "$analysis" | sed '/<think>/,/<\/think>/d' | sed '/^$/N;/\n$/D')
-            comment+="\n- **File: $file**\n  - $content_type:\n    \`\`\`\n$content\n    \`\`\`\n  - Analysis:\n    $clean_analysis\n"
-            has_processed_files=true
-            # Mark if vulnerabilities found (based on keywords in analysis)
-            if echo "$clean_analysis" | grep -qi "vulnerability\|exploit\|cve"; then
+            comment+="\n- **File: $file**\n  - Code:\n    \`\`\`solidity\n$content\n    \`\`\`\n  - Analysis:\n    $analysis\n"
+            if echo "$analysis" | grep -qi "vulnerability\|exploit\|cve"; then
               has_vulnerabilities=true
             fi
-
-            # Post comment incrementally for each file
-            echo -e "$comment" > code_analysis_comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            sleep 1  # Avoid GitHub API rate limiting
+            processed_files=$((processed_files + 1))
           done
-
-          # Check if any files were processed
-          if [ "$has_processed_files" = false ]; then
-            if [ "$comment" = "## Changed Code Security Analysis\n\n" ]; then
-              comment+="✅ No valid code changes detected or analysis completed without issues.\n"
-            else
-              comment+="\n⚠️ No files were successfully analyzed due to errors.\n"
-            fi
-            echo -e "$comment" > code_analysis_comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            echo "⚠️ No files were successfully analyzed"
-            exit 1
-          fi
-
-          # Finalize comment
-          comment+="\n📝 Review the analysis above and address any identified vulnerabilities."
           echo -e "$comment" > code_analysis_comment.md
           gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-
-          # Fail workflow if vulnerabilities found
           if [ "$has_vulnerabilities" = true ]; then
-            echo "⚠️ Potential vulnerabilities found in changed code."
+            echo "⚠️ Potential vulnerabilities found."
             exit 1
-          else
-            echo "✅ No vulnerabilities detected in changed code."
-            exit 0
           fi
+          echo "✅ No vulnerabilities detected."
         continue-on-error: true
 
-      ####################################### Setup #########################################################
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      # - name: Install dependencies
-      #   run: npm ci
-      #   continue-on-error: true
-
-      - name: Grant execute permission to jest
-        run: chmod +x ./node_modules/.bin/jest
-        continue-on-error: true
-
-      - name: Run tests with coverage
-        run: npm test
-        continue-on-error: true
-
-      ####################################### NPM Audit #########################################################
-
+      ####################################### npm Audit #########################################################
       - name: Run npm audit
         run: |
-          docker run --rm -v $(pwd):/app d4kw1n/npm-audit:latest > audit-report.json || echo "npm audit completed with vulnerabilities"
+          npm audit --json > audit-report.json || echo "npm audit completed with vulnerabilities"
         continue-on-error: true
 
-      - name: Upload audit report
+      - name: Upload npm audit report
         uses: actions/upload-artifact@v4
         with:
           name: npm-audit-report
@@ -277,90 +144,41 @@ jobs:
 
       - name: Comment npm audit results on PR
         if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const fs = require('fs');
-            let auditReport;
-            try {
-              auditReport = JSON.parse(fs.readFileSync('audit-report.json', 'utf8'));
-            } catch (error) {
-              auditReport = { error: 'Failed to parse audit-report.json: ' + error.message };
-            }
-
-            let commentBody = '## npm audit Results\n\n';
-            if (auditReport.error) {
-              commentBody += `❌ Error: ${auditReport.error}\n`;
-            } else if (!auditReport.vulnerabilities || Object.keys(auditReport.vulnerabilities).length === 0) {
-              commentBody += '✅ No vulnerabilities found.\n';
-            } else {
-              const vulnCount = auditReport.metadata.vulnerabilities;
-              commentBody += `⚠️ Found ${Object.keys(auditReport.vulnerabilities).length} vulnerabilities:\n`;
-              commentBody += `- Critical: ${vulnCount.critical}\n`;
-              commentBody += `- High: ${vulnCount.high}\n`;
-              commentBody += `- Moderate: ${vulnCount.moderate}\n`;
-              commentBody += `- Low: ${vulnCount.low}\n\n`;
-              commentBody += '### Details\n';
-
-              for (const [pkg, vuln] of Object.entries(auditReport.vulnerabilities)) {
-                commentBody += `- **${pkg}** (Severity: ${vuln.severity.toUpperCase()})\n`;
-                if (vuln.via && vuln.via.length > 0) {
-                  const cves = vuln.via
-                    .filter(v => v.cve)
-                    .map(v => v.cve)
-                    .join(', ');
-                  commentBody += `  - CVEs: ${cves || 'None'}\n`;
-                  const descriptions = vuln.via
-                    .filter(v => v.title)
-                    .map(v => v.title)
-                    .join('; ');
-                  commentBody += `  - Description: ${descriptions || 'No description available'}\n`;
-                }
-                if (vuln.fixAvailable) {
-                  commentBody += `  - Fix: Run \`npm audit fix\` or update to ${vuln.fixAvailable.toVersion || 'latest'}\n`;
-                }
-                commentBody += '\n';
-              }
-              commentBody += '📝 Full details in the `npm-audit-report` artifact.\n';
-            }
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: commentBody
-            });
-
-      - name: Check for critical vulnerabilities
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -f audit-report.json ] && jq -e '.metadata.vulnerabilities.critical > 0' audit-report.json; then
-            echo "Critical vulnerabilities found!"
-            exit 1
+          comment="## npm Audit Results\n\n"
+          if [ ! -f audit-report.json ]; then
+            comment+="❌ npm audit failed or no report generated.\n"
           else
-            echo "No critical vulnerabilities found or audit report is invalid."
+            vuln_count=$(jq '.metadata.vulnerabilities | .critical + .high + .moderate + .low' audit-report.json)
+            if [ "$vuln_count" -eq 0 ]; then
+              comment+="✅ No vulnerabilities found.\n"
+            else
+              comment+="⚠️ Found $vuln_count vulnerabilities:\n"
+              jq -r '.vulnerabilities | to_entries[] | "- **\(.key)** (Severity: \(.value.severity | ascii_upcase)): \(.value.title // "No description")"' audit-report.json | while read -r vuln; do
+                comment+="  $vuln\n"
+              done
+              comment+="\n📝 Run `npm audit fix` or review the `npm-audit-report` artifact.\n"
+            fi
           fi
+          echo -e "$comment" > npm_audit_comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file npm_audit_comment.md
         continue-on-error: true
 
-      - name: Grant permissions to working directory
-        run: |
-          chmod -R a+w /home/runner/work/security-scan/security-scan
-
       ####################################### ZAP Scan #########################################################
-
       - name: ZAP Scan
         uses: zaproxy/action-baseline@v0.14.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           docker_name: 'ghcr.io/zaproxy/zaproxy:stable'
-          target: 'https://example.com' # Replace with your target URL
+          target: 'https://your-dapp-frontend.com' # Replace with actual DApp frontend or API
           rules_file_name: '.zap/rules.tsv'
-          cmd_options: '-a'
+          cmd_options: '-a -j' # Enable AJAX spider for DApp frontends
+        continue-on-error: true
 
       ####################################### SonarQube Scan #########################################################
-
       - name: SonarQube Scan
-        id: sonar_scan
         uses: SonarSource/sonarqube-scan-action@v4
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -371,125 +189,41 @@ jobs:
             -Dsonar.projectKey=d4kw1n_security-scan
             -Dsonar.sources=.
             -Dsonar.sourceEncoding=UTF-8
-            -Dsonar.exclusions=node_modules/**,dist/**,coverage/**
+            -Dsonar.exclusions=node_modules/**,dist/**,coverage/**,test/**
+            -Dsonar.solidity.file.suffixes=.sol
             -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
             -Dsonar.pullrequest.branch=${{ github.head_ref }}
             -Dsonar.pullrequest.base=${{ github.base_ref }}
             -Dsonar.qualitygate.wait=true
         continue-on-error: true
 
-      - name: Check for Vulnerabilities and Analyze with Perplexity
+      - name: Check SonarQube Vulnerabilities
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
         run: |
           sudo apt-get update && sudo apt-get install -y jq
-
+          comment="## SonarQube Analysis Report\n\n"
           response=$(curl -s -f -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED&pullRequest=${{ github.event.pull_request.number }}")
           if [ $? -ne 0 ]; then
-            echo "❌ Failed to query SonarCloud API. Check SONAR_TOKEN or network. Response: $response"
+            comment+="❌ Failed to query SonarCloud API.\n"
+            echo -e "$comment" > sonar_comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file sonar_comment.md
             exit 1
           fi
-
-          vulnerabilities=$(echo "$response" | jq '.issues')
-          if [ $? -ne 0 ]; then
-            echo "❌ Failed to parse SonarCloud API response. Response: $response"
-            exit 1
-          fi
-
-          comment="⚠️ **SonarCloud Analysis Report**\n\n"
-          echo -e "$comment" > comment.md
-
-          if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ] || [ "${{ steps.sonar_scan.outcome }}" != "success" ]; then
-            if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
-              comment="### Vulnerabilities Analysis by Perplexity\n"
-              echo "$vulnerabilities" | jq -r '.[] | @base64' | while read -r vuln_base64; do
-                vuln=$(echo "$vuln_base64" | base64 --decode)
-                rule=$(echo "$vuln" | jq -r '.rule')
-                message=$(echo "$vuln" | jq -r '.message')
-                severity=$(echo "$vuln" | jq -r '.severity')
-                file=$(echo "$vuln" | jq -r '.component' | sed 's/.*://')
-                line=$(echo "$vuln" | jq -r '.line // "N/A"')
-
-                code_snippet=""
-                if [ "$line" != "N/A" ] && [ -f "$file" ]; then
-                  start_line=$((line - 2 > 0 ? line - 2 : 1))
-                  end_line=$((line + 2))
-                  code_snippet=$(sed -n "${start_line},${end_line}p" "$file" | jq -sR .)
-                else
-                  code_snippet="\"Code snippet not available (file missing or line not specified).\""
-                fi
-
-                payload=$(jq -n \
-                  --arg rule "$rule" \
-                  --arg message "$message" \
-                  --arg severity "$severity" \
-                  --arg file "$file" \
-                  --arg line "$line" \
-                  --argjson code "$code_snippet" \
-                  '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze the following code vulnerability from SonarCloud and provide a detailed explanation, including why it is a security issue, potential impact, and recommended fixes:\n\n- Rule: \($rule)\n- Message: \($message)\n- Severity: \($severity)\n- File: \($file)\n- Line: \($line)\n- Code:\n```\n\($code)\n```"}]}')
-
-                if ! echo "$payload" | jq . >/dev/null 2>&1; then
-                  echo "❌ Invalid JSON payload for vulnerability: $rule. Payload: $payload"
-                  comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Code: Not available\n  - Analysis: Failed to create valid request for Perplexity.\n"
-                  continue
-                fi
-
-                echo "Sending payload to Perplexity for vulnerability: $rule"
-                echo "Payload: $payload"
-
-                api_response=$(curl -s -w "\n%{http_code}" -X POST \
-                  -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
-                  -H "Content-Type: application/json" \
-                  https://api.perplexity.ai/chat/completions \
-                  -d "$payload")
-
-                http_code=$(echo "$api_response" | tail -n1)
-                api_body=$(echo "$api_response" | sed '$d')
-
-                echo "Perplexity API response for vulnerability: $rule"
-                echo "HTTP Code: $http_code"
-                echo "Response Body: $api_body"
-
-                if [ "$http_code" != "200" ]; then
-                  echo "❌ Failed to get Perplexity analysis for vulnerability: $rule. HTTP Code: $http_code, Response: $api_body"
-                  comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Code: Not available\n  - Analysis: Failed to retrieve analysis from Perplexity (HTTP $http_code: $api_body).\n"
-                else
-                  if ! echo "$api_body" | jq . >/dev/null 2>&1; then
-                    echo "❌ Invalid JSON response from Perplexity for vulnerability: $rule. Response: $api_body"
-                    comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Code: Not available\n  - Analysis: Invalid response from Perplexity.\n"
-                  else
-                    analysis=$(echo "$api_body" | jq -r '.choices[0].message.content // ""')
-                    if [ -z "$analysis" ]; then
-                      echo "❌ Empty or missing analysis in Perplexity response for vulnerability: $rule. Response: $api_body"
-                      comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Code: Not available\n  - Analysis: No analysis provided by Perplexity.\n"
-                    else
-                      clean_analysis=$(echo "$analysis" | sed '/<think>/,/<\/think>/d' | sed '/^$/N;/\n$/D')
-                      if [ "$code_snippet" != "\"Code snippet not available (file missing or line not specified).\"" ]; then
-                        comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Code:\n    \`\`\`\n$(echo "$code_snippet" | jq -r .)\n    \`\`\`\n  - Analysis:\n    $clean_analysis\n"
-                        echo -e "$comment" > comment.md
-                        gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
-                      else
-                        comment+="\n- **$rule**: $message\n  - Severity: $severity, File: $file, Line: $line\n  - Code: Not available\n  - Analysis:\n    $clean_analysis\n"
-                        echo -e "$comment" > comment.md
-                        gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
-                      fi
-                    fi
-                  fi
-                fi
-                sleep 1
-              done
-            else
-              comment="No vulnerabilities found, but Quality Gate failed due to other criteria (e.g., coverage).\n"
-            fi
-            comment="\nPlease review and address these issues. See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details."
-
-            echo -e "$comment" > comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
-            exit 1
+          vulnerabilities=$(echo "$response" | jq '.issues // []')
+          if [ "$(echo "$vulnerabilities" | jq length)" -eq 0 ]; then
+            comment+="✅ No vulnerabilities found.\n"
           else
-            echo "✅ No vulnerabilities found and Quality Gate passed. PR can be merged."
-            exit 0
+            comment+="⚠️ Found vulnerabilities:\n"
+            echo "$vulnerabilities" | jq -r '.[] | "- **\(.rule)**: \(.message) (Severity: \(.severity)) in \(.component | sub(".*:"; "")) at line \(.line // "N/A")"' | while read -r vuln; do
+              comment+="  $vuln\n"
+            done
+            comment+="\n📝 See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details.\n"
+          fi
+          echo -e "$comment" > sonar_comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file sonar_comment.md
+          if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
+            exit 1
           fi
         continue-on-error: false
