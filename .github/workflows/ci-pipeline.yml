@@ -13,6 +13,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      ####################################### Analyze New Code  #########################################################
+
+
       - name: Analyze Changed Code with Perplexity
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -123,6 +126,180 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Analyze Changed Code with Perplexity
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+        run: |
+          # Install jq for JSON processing
+          sudo apt-get update && sudo apt-get install -y jq || {
+            comment="## Changed Code Security Analysis\n\n❌ Failed to install jq for JSON processing.\n"
+            echo -e "$comment" > code_analysis_comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+            echo "❌ Failed to install jq"
+            exit 1
+          }
+
+          # Initialize comment for PR
+          comment="## Changed Code Security Analysis\n\n"
+          has_vulnerabilities=false
+
+          # Get the diff between base and head branches
+          if ! git fetch origin ${{ github.base_ref }}; then
+            comment+="❌ Failed to fetch base branch: ${{ github.base_ref }}.\n"
+            echo -e "$comment" > code_analysis_comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+            echo "❌ Failed to fetch base branch"
+            exit 1
+          }
+
+          diff_output=$(git diff origin/${{ github.base_ref }} HEAD) || {
+            comment+="❌ Failed to generate git diff between ${{ github.base_ref }} and HEAD.\n"
+            echo -e "$comment" > code_analysis_comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+            echo "❌ Failed to generate git diff"
+            exit 1
+          }
+
+          # Check if diff is empty
+          if [ -z "$diff_output" ]; then
+            comment+="✅ No code changes detected in this pull request.\n"
+            echo -e "$comment" > code_analysis_comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+            echo "✅ No code changes detected"
+            exit 0
+          }
+
+          # Process each changed file
+          echo "$diff_output" | awk '/^diff --git/ {file=$3; sub(/^a\//, "", file); getline; while ($0 !~ /^@@/) {getline}; diff=""; while ($0 !~ /^diff --git/ && $0 !~ /^$/) {diff=diff $0 "\n"; getline}; print file "\n" diff}' | while IFS= read -r file && IFS= read -r diff; do
+            if [ -z "$file" ] || [ -z "$diff" ]; then
+              comment+="\n- **Unknown File**\n  - Analysis: Failed to parse diff for file (empty file or diff).\n"
+              echo -e "$comment" > code_analysis_comment.md
+              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+              echo "❌ Empty file or diff detected"
+              continue
+            fi
+
+            # Clean diff for API (limit to 1000 chars to avoid payload size issues)
+            clean_diff=$(echo "$diff" | head -c 1000)
+            if [ ${#diff} -gt 1000 ]; then
+              clean_diff="$clean_diff\n[...truncated...]"
+            fi
+
+            # Create JSON payload for Perplexity
+            payload=$(jq -n \
+              --arg file "$file" \
+              --arg diff "$clean_diff" \
+              '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze the following code changes for security vulnerabilities. Provide a detailed explanation including:\n- Identified vulnerabilities\n- How they can be exploited\n- Recommended remediation steps\n- Related CVEs (if any)\n- Links to CVE details\n\nFile: \($file)\n\nCode changes:\n```\n\($diff)\n```"}]}') || {
+              comment+="\n- **File: $file**\n  - Analysis: Failed to create JSON payload for Perplexity.\n"
+              echo -e "$comment" > code_analysis_comment.md
+              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+              echo "❌ Failed to create JSON payload for file: $file"
+              continue
+            }
+
+            # Validate payload
+            if ! echo "$payload" | jq . >/dev/null 2>&1; then
+              comment+="\n- **File: $file**\n  - Analysis: Invalid JSON payload for Perplexity.\n"
+              echo -e "$comment" > code_analysis_comment.md
+              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+              echo "❌ Invalid JSON payload for file: $file"
+              continue
+            fi
+
+            # Log payload for debugging
+            echo "Sending payload to Perplexity for file: $file"
+            echo "Payload: $payload"
+
+            # Call Perplexity API
+            api_response=$(curl -s -w "\n%{http_code}" -X POST \
+              -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
+              -H "Content-Type: application/json" \
+              https://api.perplexity.ai/chat/completions \
+              -d "$payload") || {
+              comment+="\n- **File: $file**\n  - Analysis: Failed to call Perplexity API (curl error).\n"
+              echo -e "$comment" > code_analysis_comment.md
+              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+              echo "❌ Failed to call Perplexity API for file: $file"
+              continue
+            }
+
+            # Split response and HTTP code
+            http_code=$(echo "$api_response" | tail -n1)
+            api_body=$(echo "$api_response" | sed '$d')
+
+            # Log API response for debugging
+            echo "Perplexity API response for file: $file"
+            echo "HTTP Code: $http_code"
+            echo "Response Body: $api_body"
+
+            if [ "$http_code" != "200" ]; then
+              comment+="\n- **File: $file**\n  - Analysis: Failed to retrieve analysis from Perplexity (HTTP $http_code).\n"
+              echo -e "$comment" > code_analysis_comment.md
+              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+              echo "❌ Failed to get Perplexity analysis for file: $file. HTTP Code: $http_code, Response: $api_body"
+              continue
+            fi
+
+            # Validate JSON response
+            if ! echo "$api_body" | jq . >/dev/null 2>&1; then
+              comment+="\n- **File: $file**\n  - Analysis: Invalid JSON response from Perplexity.\n"
+              echo -e "$comment" > code_analysis_comment.md
+              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+              echo "❌ Invalid JSON response from Perplexity for file: $file. Response: $api_body"
+              continue
+            fi
+
+            # Extract Perplexity analysis
+            analysis=$(echo "$api_body" | jq -r '.choices[0].message.content // ""')
+            if [ -z "$analysis" ]; then
+              comment+="\n- **File: $file**\n  - Analysis: No analysis provided by Perplexity.\n"
+              echo -e "$comment" > code_analysis_comment.md
+              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+              echo "❌ Empty or missing analysis in Perplexity response for file: $file. Response: $api_body"
+              continue
+            fi
+
+            # Clean up analysis (remove <think> tags and excessive newlines)
+            clean_analysis=$(echo "$analysis" | sed '/<think>/,/<\/think>/d' | sed '/^$/N;/\n$/D')
+            comment+="\n- **File: $file**\n  - Code Changes:\n    \`\`\`\n$clean_diff\n    \`\`\`\n  - Analysis:\n    $clean_analysis\n"
+            # Mark if vulnerabilities found (based on keywords in analysis)
+            if echo "$clean_analysis" | grep -qi "vulnerability\|exploit\|cve"; then
+              has_vulnerabilities=true
+            fi
+
+            # Post comment incrementally for each file
+            echo -e "$comment" > code_analysis_comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+            sleep 1  # Avoid GitHub API rate limiting
+          done
+
+          # Check if awk processing produced any output
+          if [ "$comment" = "## Changed Code Security Analysis\n\n" ]; then
+            comment+="✅ No valid code changes detected or analysis completed without issues.\n"
+            echo -e "$comment" > code_analysis_comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+            echo "✅ No valid code changes detected"
+            exit 0
+          fi
+
+          # Finalize comment
+          comment+="\n📝 Review the analysis above and address any identified vulnerabilities."
+          echo -e "$comment" > code_analysis_comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+
+          # Fail workflow if vulnerabilities found
+          if [ "$has_vulnerabilities" = true ]; then
+            echo "⚠️ Potential vulnerabilities found in changed code."
+            exit 1
+          else
+            echo "✅ No vulnerabilities detected in changed code."
+            exit 0
+          fi
+        continue-on-error: true
+
+      ####################################### Setup  #########################################################
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -139,6 +316,8 @@ jobs:
       - name: Run tests with coverage
         run: npm test
         continue-on-error: true
+
+      ####################################### NPM Audit  #########################################################
 
       - name: Run npm audit
         run: |
@@ -223,14 +402,20 @@ jobs:
         run: |
           chmod -R a+w /home/runner/work/security-scan/security-scan
 
+
+      ####################################### ZAP Scan  #########################################################
+
       - name: ZAP Scan
         uses: zaproxy/action-baseline@v0.14.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           docker_name: 'ghcr.io/zaproxy/zaproxy:stable'
-          target: 'http://localhost:8000/api/v1/eval'
+          target: 'https://example.com' # Replace with your target URL
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
+
+      ####################################### SonarQube Scan  #########################################################
+
 
       - name: SonarQube Scan
         id: sonar_scan
