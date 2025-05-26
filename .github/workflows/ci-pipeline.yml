@@ -31,17 +31,22 @@ jobs:
         run: |
           pip install slither-analyzer
           pip install solc-select
-          solc-select install 0.8.20
-          solc-select use 0.8.20
+          solc-select install 0.8.21
+          solc-select use 0.8.21
 
-      # Bước 4: Chạy phân tích Slither
+      # Bước 4: Kiểm tra file Solidity
+      - name: Check for Solidity files
+        run: |
+          if ! find contracts -name "*.sol" | grep .; then
+            echo "No Solidity files found in contracts/. Please add .sol files."
+            exit 1
+          fi
+
+      # Bước 5: Chạy phân tích Slither
       - name: Run Slither Analysis
         id: slither
         run: |
-          if slither . --exclude-low --exclude-informational \
-            --checklist \
-            --filter-paths "test|mocks" \
-            --json slither-report.json; then
+          if slither . --json slither-report.json; then
             echo "Slither ran successfully"
           else
             echo "Slither failed, but continuing"
@@ -49,14 +54,14 @@ jobs:
           fi
         continue-on-error: true
 
-      # Bước 5: Tải lên báo cáo Slither
+      # Bước 6: Tải lên báo cáo Slither
       - name: Upload Slither Report
         uses: actions/upload-artifact@v4
         with:
           name: slither-report
           path: slither-report.json
 
-      # Bước 6: Bình luận kết quả vào PR (chỉ chạy khi có pull request)
+      # Bước 7: Bình luận kết quả vào PR (chỉ chạy khi có pull request)
       - name: Comment PR with Results
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
@@ -78,10 +83,10 @@ jobs:
                   comment += `- ${detector.description}\n  - Impact: ${detector.impact}\n  - Confidence: ${detector.confidence}\n`;
                 });
               } else {
-                comment += '⚠️ Invalid report format. Please check the Slither configuration.';
+                comment += '⚠️ Invalid report format. Please check the Slither configuration and logs.';
               }
             } catch (error) {
-              comment += `⚠️ Error processing Slither report: ${error.message}`;
+              comment += `⚠️ Error processing Slither report: ${error.message}\nPlease check the uploaded slither-report.json and workflow logs.`;
             }
             
             github.rest.issues.createComment({
