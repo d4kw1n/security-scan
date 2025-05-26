@@ -56,7 +56,7 @@ jobs:
               auditReport = { error: 'Failed to parse audit-report.json: ' + error.message };
             }
 
-            let commentBody = '## 'npm audit' Results\n\n';
+            let commentBody = '## npm audit Results\n\n';
             if (auditReport.error) {
               commentBody += `❌ Error: ${auditReport.error}\n`;
             } else if (!auditReport.vulnerabilities || Object.keys(auditReport.vulnerabilities).length === 0) {
