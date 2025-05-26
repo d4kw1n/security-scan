@@ -1,12 +1,25 @@
-name: SonarQube Cloud Scan
+name: Smart Contract Security Scan
 
 on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'contracts/**'
+      - 'scripts/**'
   pull_request:
     types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - develop
+    paths:
+      - 'contracts/**'
+      - 'scripts/**'
 
 jobs:
-  sonarqube:
-    name: SonarQube Scan
+  security-scan:
+    name: Slither Security Scan
     runs-on: ubuntu-latest
     steps:
       # Bước 1: Checkout code
@@ -49,7 +62,7 @@ jobs:
           name: slither-report
           path: slither-report.json
 
-      # Bước 6: Bình luận kết quả vào PR
+      # Bước 6: Bình luận kết quả vào PR (chỉ chạy khi có pull request)
       - name: Comment PR with Results
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
