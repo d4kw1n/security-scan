@@ -32,9 +32,19 @@ jobs:
             fi
           fi
 
+          # Validate PERPLEXITY_API_KEY
+          if [ -z "$PERPLEXITY_API_KEY" ]; then
+            comment="## Changed Code Security Analysis\n\n❌ PERPLEXITY_API_KEY is not set. Please configure it in repository secrets.\n"
+            echo -e "$comment" > code_analysis_comment.md
+            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+            echo "❌ PERPLEXITY_API_KEY is not set"
+            exit 1
+          fi
+
           # Initialize comment for PR
           comment="## Changed Code Security Analysis\n\n"
           has_vulnerabilities=false
+          has_processed_files=false
 
           # Get the diff between base and head branches
           if ! git fetch origin ${{ github.base_ref }}; then
@@ -74,6 +84,15 @@ jobs:
               continue
             fi
 
+            # Skip binary files
+            if [ -f "$file" ] && file -b "$file" | grep -q "binary"; then
+              comment+="\n- **File: $file**\n  - Analysis: Skipped due to binary file content.\n"
+              echo -e "$comment" > code_analysis_comment.md
+              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+              echo "❌ Skipped binary file: $file"
+              continue
+            fi
+
             # Handle new files (status A) and modified files (status M)
             if [ "$status" = "A" ]; then
               # Read full content for new files
@@ -84,7 +103,8 @@ jobs:
                 echo "❌ New file $file not found"
                 continue
               fi
-              content=$(cat "$file" | head -c 1000)
+              # Clean content to remove null bytes and invalid characters
+              content=$(cat "$file" | tr -d '\0' | head -c 1000)
               if [ $(wc -c < "$file") -gt 1000 ]; then
                 content="$content\n[...truncated...]"
               fi
@@ -99,7 +119,7 @@ jobs:
                 echo "❌ Failed to get diff for file: $file"
                 continue
               fi
-              content=$(echo "$diff" | head -c 1000)
+              content=$(echo "$diff" | tr -d '\0' | head -c 1000)
               if [ ${#diff} -gt 1000 ]; then
                 content="$content\n[...truncated...]"
               fi
@@ -189,6 +209,7 @@ jobs:
             # Clean up analysis (remove <think> tags and excessive newlines)
             clean_analysis=$(echo "$analysis" | sed '/<think>/,/<\/think>/d' | sed '/^$/N;/\n$/D')
             comment+="\n- **File: $file**\n  - $content_type:\n    \`\`\`\n$content\n    \`\`\`\n  - Analysis:\n    $clean_analysis\n"
+            has_processed_files=true
             # Mark if vulnerabilities found (based on keywords in analysis)
             if echo "$clean_analysis" | grep -qi "vulnerability\|exploit\|cve"; then
               has_vulnerabilities=true
@@ -201,12 +222,16 @@ jobs:
           done
 
           # Check if any files were processed
-          if [ "$comment" = "## Changed Code Security Analysis\n\n" ]; then
-            comment+="✅ No valid code changes detected or analysis completed without issues.\n"
+          if [ "$has_processed_files" = false ]; then
+            if [ "$comment" = "## Changed Code Security Analysis\n\n" ]; then
+              comment+="✅ No valid code changes detected or analysis completed without issues.\n"
+            else
+              comment+="\n⚠️ No files were successfully analyzed due to errors.\n"
+            fi
             echo -e "$comment" > code_analysis_comment.md
             gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            echo "✅ No valid code changes detected"
-            exit 0
+            echo "⚠️ No files were successfully analyzed"
+            exit 1
           fi
 
           # Finalize comment
