@@ -18,9 +18,9 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
-        continue-on-error: true
+      # - name: Install dependencies
+      #   run: npm ci
+      #   continue-on-error: true
 
       - name: Grant execute permission to jest
         run: chmod +x ./node_modules/.bin/jest
