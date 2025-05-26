@@ -13,21 +13,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      ####################################### Analyze New Code  #########################################################
+      ####################################### Analyze New Code #########################################################
 
       - name: Analyze Changed Code with Perplexity
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
         run: |
-          # Install jq for JSON processing
-          sudo apt-get update && sudo apt-get install -y jq || {
-            comment="## Changed Code Security Analysis\n\n❌ Failed to install jq for JSON processing.\n"
-            echo -e "$comment" > code_analysis_comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            echo "❌ Failed to install jq"
-            exit 1
-          }
+          # Check if jq is installed, install if not
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y jq
+            if [ $? -ne 0 ]; then
+              comment="## Changed Code Security Analysis\n\n❌ Failed to install jq for JSON processing.\n"
+              echo -e "$comment" > code_analysis_comment.md
+              gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
+              echo "❌ Failed to install jq"
+              exit 1
+            fi
+          fi
 
           # Initialize comment for PR
           comment="## Changed Code Security Analysis\n\n"
@@ -40,15 +43,16 @@ jobs:
             gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
             echo "❌ Failed to fetch base branch"
             exit 1
-          }
+          fi
 
-          diff_output=$(git diff origin/${{ github.base_ref }} HEAD) || {
+          diff_output=$(git diff origin/${{ github.base_ref }} HEAD)
+          if [ $? -ne 0 ]; then
             comment+="❌ Failed to generate git diff between ${{ github.base_ref }} and HEAD.\n"
             echo -e "$comment" > code_analysis_comment.md
             gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
             echo "❌ Failed to generate git diff"
             exit 1
-          }
+          fi
 
           # Check if diff is empty
           if [ -z "$diff_output" ]; then
@@ -57,7 +61,7 @@ jobs:
             gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
             echo "✅ No code changes detected"
             exit 0
-          }
+          fi
 
           # Process each changed file
           echo "$diff_output" | awk '/^diff --git/ {file=$3; sub(/^a\//, "", file); getline; while ($0 !~ /^@@/) {getline}; diff=""; while ($0 !~ /^diff --git/ && $0 !~ /^$/) {diff=diff $0 "\n"; getline}; print file "\n" diff}' | while IFS= read -r file && IFS= read -r diff; do
@@ -79,13 +83,14 @@ jobs:
             payload=$(jq -n \
               --arg file "$file" \
               --arg diff "$clean_diff" \
-              '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze the following code changes for security vulnerabilities. Provide a detailed explanation including:\n- Identified vulnerabilities\n- How they can be exploited\n- Recommended remediation steps\n- Related CVEs (if any)\n- Links to CVE details\n\nFile: \($file)\n\nCode changes:\n```\n\($diff)\n```"}]}') || {
+              '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze the following code changes for security vulnerabilities. Provide a detailed explanation including:\n- Identified vulnerabilities\n- How they can be exploited\n- Recommended remediation steps\n- Related CVEs (if any)\n- Links to CVE details\n\nFile: \($file)\n\nCode changes:\n```\n\($diff)\n```"}]}')
+            if [ $? -ne 0 ]; then
               comment+="\n- **File: $file**\n  - Analysis: Failed to create JSON payload for Perplexity.\n"
               echo -e "$comment" > code_analysis_comment.md
               gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
               echo "❌ Failed to create JSON payload for file: $file"
               continue
-            }
+            fi
 
             # Validate payload
             if ! echo "$payload" | jq . >/dev/null 2>&1; then
@@ -105,13 +110,14 @@ jobs:
               -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
               -H "Content-Type: application/json" \
               https://api.perplexity.ai/chat/completions \
-              -d "$payload") || {
+              -d "$payload")
+            if [ $? -ne 0 ]; then
               comment+="\n- **File: $file**\n  - Analysis: Failed to call Perplexity API (curl error).\n"
               echo -e "$comment" > code_analysis_comment.md
               gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
               echo "❌ Failed to call Perplexity API for file: $file"
               continue
-            }
+            fi
 
             # Split response and HTTP code
             http_code=$(echo "$api_response" | tail -n1)
@@ -186,7 +192,8 @@ jobs:
             exit 0
           fi
         continue-on-error: true
-      ####################################### Setup  #########################################################
+
+      ####################################### Setup #########################################################
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -205,7 +212,7 @@ jobs:
         run: npm test
         continue-on-error: true
 
-      ####################################### NPM Audit  #########################################################
+      ####################################### NPM Audit #########################################################
 
       - name: Run npm audit
         run: |
@@ -290,8 +297,7 @@ jobs:
         run: |
           chmod -R a+w /home/runner/work/security-scan/security-scan
 
-
-      ####################################### ZAP Scan  #########################################################
+      ####################################### ZAP Scan #########################################################
 
       - name: ZAP Scan
         uses: zaproxy/action-baseline@v0.14.0
@@ -302,8 +308,7 @@ jobs:
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
 
-      ####################################### SonarQube Scan  #########################################################
-
+      ####################################### SonarQube Scan #########################################################
 
       - name: SonarQube Scan
         id: sonar_scan
