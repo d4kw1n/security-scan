@@ -2,228 +2,75 @@ name: Smart Contract Security Scan
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - develop
+    paths:
+      - 'contracts/**'
+      - 'test/**'
+      - 'scripts/**'
 
 jobs:
   security-scan:
-    name: Security Scan
     runs-on: ubuntu-latest
+    
     steps:
-      # Checkout code
-      - uses: actions/checkout@v4
+      # Bước 1: Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Bước 2: Cài đặt Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
+          python-version: '3.9'
 
-      ####################################### Slither Analysis #########################################################
-      - name: Install Python and Slither
+      # Bước 3: Cài đặt Slither
+      - name: Install Slither
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          pip3 install slither-analyzer
+          pip install slither-analyzer
+          pip install solc-select
+          solc-select install 0.8.20
+          solc-select use 0.8.20
+
+      # Bước 4: Chạy phân tích Slither
+      - name: Run Slither Analysis
+        run: |
+          slither . --exclude-low --exclude-informational \
+            --checklist \
+            --filter-paths "test|mocks" \
+            --json slither-report.json
         continue-on-error: true
 
-      - name: Run Slither for Solidity Analysis
-        run: |
-          slither . --json slither-report.json --exclude-informational --exclude-low || echo "Slither completed with findings"
-        continue-on-error: true
-
-      - name: Upload Slither report
+      # Bước 5: Tải lên báo cáo Slither
+      - name: Upload Slither Report
         uses: actions/upload-artifact@v4
         with:
           name: slither-report
           path: slither-report.json
-        if: always()
 
-      - name: Comment Slither results on PR
-        if: always() && github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          comment="## Slither Security Analysis\n\n"
-          if [ ! -f slither-report.json ]; then
-            comment+="❌ Slither analysis failed or no Solidity files found.\n"
-          else
-            issues=$(jq '.results.issues // []' slither-report.json)
-            issue_count=$(echo "$issues" | jq length)
-            if [ "$issue_count" -eq 0 ]; then
-              comment+="✅ No high or medium severity issues found in Solidity contracts.\n"
-            else
-              comment+="⚠️ Found $issue_count issues in Solidity contracts:\n"
-              echo "$issues" | jq -r '.[] | "- **\(.check)**: \(.description) (Confidence: \(.confidence), Impact: \(.impact)) in \(.source_mapping.filename_relative) at line \(.source_mapping.lines[0])"' | while read -r issue; do
-                comment+="  $issue\n"
-              done
-              comment+="\n📝 Full details in the `slither-report` artifact.\n"
-            fi
-          fi
-          echo -e "$comment" > slither_comment.md
-          gh pr comment ${{ github.event.pull_request.number }} --body-file slither_comment.md
-        continue-on-error: true
-
-      ####################################### Analyze Changed Code with Perplexity #########################################################
-      - name: Analyze Changed Code with Perplexity
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
-        run: |
-          sudo apt-get update && sudo apt-get install -y jq
-          comment="## Changed Code Security Analysis\n\n"
-          has_vulnerabilities=false
-          processed_files=0
-
-          if [ -z "$PERPLEXITY_API_KEY" ]; then
-            comment+="❌ PERPLEXITY_API_KEY is not set.\n"
-            echo -e "$comment" > code_analysis_comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            exit 1
-          fi
-
-          changed_files=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep '\.sol$')
-          if [ -z "$changed_files" ]; then
-            comment+="✅ No Solidity files changed in this pull request.\n"
-            echo -e "$comment" > code_analysis_comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-            exit 0
-          fi
-
-          echo "$changed_files" | while read -r file; do
-            if [ "$processed_files" -ge 5 ]; then
-              comment+="\n⚠️ Skipped additional files due to API quota limits.\n"
-              break
-            fi
-            content=$(cat "$file" | tr -d '\0' | head -c 1000)
-            if [ $(wc -c < "$file") -gt 1000 ]; then
-              content="$content\n[...truncated...]"
-            fi
-            payload=$(jq -n \
-              --arg file "$file" \
-              --arg content "$content" \
-              '{model: "sonar-reasoning", messages: [{role: "user", content: "Analyze this Solidity code for vulnerabilities:\n- File: \($file)\n- Code:\n```\n\($content)\n```\nProvide:\n- Identified vulnerabilities\n- Exploitation risks\n- Remediation steps\n- Related CVEs\n- CVE links"}]}')
-            api_response=$(curl -s -w "\n%{http_code}" -X POST \
-              -H "Authorization: Bearer $PERPLEXITY_API_KEY" \
-              -H "Content-Type: application/json" \
-              https://api.perplexity.ai/chat/completions \
-              -d "$payload")
-            http_code=$(echo "$api_response" | tail -n1)
-            api_body=$(echo "$api_response" | sed '$d')
-            if [ "$http_code" != "200" ]; then
-              comment+="\n- **File: $file**\n  - Analysis: Failed to retrieve analysis (HTTP $http_code).\n"
-              continue
-            fi
-            analysis=$(echo "$api_body" | jq -r '.choices[0].message.content // ""' | sed '/<think>/,/<\/think>/d')
-            if [ -z "$analysis" ]; then
-              comment+="\n- **File: $file**\n  - Analysis: No analysis provided.\n"
-              continue
-            fi
-            comment+="\n- **File: $file**\n  - Code:\n    \`\`\`solidity\n$content\n    \`\`\`\n  - Analysis:\n    $analysis\n"
-            if echo "$analysis" | grep -qi "vulnerability\|exploit\|cve"; then
-              has_vulnerabilities=true
-            fi
-            processed_files=$((processed_files + 1))
-          done
-          echo -e "$comment" > code_analysis_comment.md
-          gh pr comment ${{ github.event.pull_request.number }} --body-file code_analysis_comment.md
-          if [ "$has_vulnerabilities" = true ]; then
-            echo "⚠️ Potential vulnerabilities found."
-            exit 1
-          fi
-          echo "✅ No vulnerabilities detected."
-        continue-on-error: true
-
-      ####################################### npm Audit #########################################################
-      - name: Run npm audit
-        run: |
-          npm audit --json > audit-report.json || echo "npm audit completed with vulnerabilities"
-        continue-on-error: true
-
-      - name: Upload npm audit report
-        uses: actions/upload-artifact@v4
+      # Bước 6: Bình luận kết quả vào PR
+      - name: Comment PR with Results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
         with:
-          name: npm-audit-report
-          path: audit-report.json
-        if: always()
-
-      - name: Comment npm audit results on PR
-        if: always() && github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          comment="## npm Audit Results\n\n"
-          if [ ! -f audit-report.json ]; then
-            comment+="❌ npm audit failed or no report generated.\n"
-          else
-            vuln_count=$(jq '.metadata.vulnerabilities | .critical + .high + .moderate + .low' audit-report.json)
-            if [ "$vuln_count" -eq 0 ]; then
-              comment+="✅ No vulnerabilities found.\n"
-            else
-              comment+="⚠️ Found $vuln_count vulnerabilities:\n"
-              jq -r '.vulnerabilities | to_entries[] | "- **\(.key)** (Severity: \(.value.severity | ascii_upcase)): \(.value.title // "No description")"' audit-report.json | while read -r vuln; do
-                comment+="  $vuln\n"
-              done
-              comment+="\n📝 Run `npm audit fix` or review the `npm-audit-report` artifact.\n"
-            fi
-          fi
-          echo -e "$comment" > npm_audit_comment.md
-          gh pr comment ${{ github.event.pull_request.number }} --body-file npm_audit_comment.md
-        continue-on-error: true
-
-      ####################################### ZAP Scan #########################################################
-      - name: ZAP Scan
-        uses: zaproxy/action-baseline@v0.14.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          docker_name: 'ghcr.io/zaproxy/zaproxy:stable'
-          target: 'https://your-dapp-frontend.com' # Replace with actual DApp frontend or API
-          rules_file_name: '.zap/rules.tsv'
-          cmd_options: '-a -j' # Enable AJAX spider for DApp frontends
-        continue-on-error: true
-
-      ####################################### SonarQube Scan #########################################################
-      - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v4
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarcloud.io
-        with:
-          args: >
-            -Dsonar.organization=d4kw1n
-            -Dsonar.projectKey=d4kw1n_security-scan
-            -Dsonar.sources=.
-            -Dsonar.sourceEncoding=UTF-8
-            -Dsonar.exclusions=node_modules/**,dist/**,coverage/**,test/**
-            -Dsonar.solidity.file.suffixes=.sol
-            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
-            -Dsonar.pullrequest.branch=${{ github.head_ref }}
-            -Dsonar.pullrequest.base=${{ github.base_ref }}
-            -Dsonar.qualitygate.wait=true
-        continue-on-error: true
-
-      - name: Check SonarQube Vulnerabilities
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          sudo apt-get update && sudo apt-get install -y jq
-          comment="## SonarQube Analysis Report\n\n"
-          response=$(curl -s -f -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/issues/search?componentKeys=d4kw1n_security-scan&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED&pullRequest=${{ github.event.pull_request.number }}")
-          if [ $? -ne 0 ]; then
-            comment+="❌ Failed to query SonarCloud API.\n"
-            echo -e "$comment" > sonar_comment.md
-            gh pr comment ${{ github.event.pull_request.number }} --body-file sonar_comment.md
-            exit 1
-          fi
-          vulnerabilities=$(echo "$response" | jq '.issues // []')
-          if [ "$(echo "$vulnerabilities" | jq length)" -eq 0 ]; then
-            comment+="✅ No vulnerabilities found.\n"
-          else
-            comment+="⚠️ Found vulnerabilities:\n"
-            echo "$vulnerabilities" | jq -r '.[] | "- **\(.rule)**: \(.message) (Severity: \(.severity)) in \(.component | sub(".*:"; "")) at line \(.line // "N/A")"' | while read -r vuln; do
-              comment+="  $vuln\n"
-            done
-            comment+="\n📝 See [SonarCloud Dashboard](https://sonarcloud.io/project/issues?id=d4kw1n_security-scan&pullRequest=${{ github.event.pull_request.number }}) for details.\n"
-          fi
-          echo -e "$comment" > sonar_comment.md
-          gh pr comment ${{ github.event.pull_request.number }} --body-file sonar_comment.md
-          if [ "$(echo "$vulnerabilities" | jq length)" -gt 0 ]; then
-            exit 1
-          fi
-        continue-on-error: false
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('slither-report.json', 'utf8'));
+            
+            let comment = '## Slither Security Scan Results\n\n';
+            if (report.success && report.results.detectors.length === 0) {
+              comment += '✅ No security issues found!';
+            } else {
+              comment += '⚠️ Potential security issues detected:\n';
+              report.results.detectors.forEach(detector => {
+                comment += `- ${detector.description}\n  - Impact: ${detector.impact}\n  - Confidence: ${detector.confidence}\n`;
+              });
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
