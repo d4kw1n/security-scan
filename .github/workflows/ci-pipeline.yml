@@ -203,7 +203,7 @@ jobs:
             fi
 
             clean_analysis=$(echo "$analysis" | sed '/<think>/,/<\/think>/d' | sed '/^$/N;/\n$/D')
-            comment+="\n- **File: $file**\n  - $content_type:\n    \`\`\`\n$content\n    \`\`\`\n  - Analysis:\n    $clean_analysis\n"
+            comment+="\n- **File: $file**\n  - $content_type:\n\`\`\`\n$content\n\`\`\`\n  - Analysis:\n    $clean_analysis\n"
             has_processed_files=true
             # Mark if vulnerabilities found (based on keywords in analysis)
             if echo "$clean_analysis" | grep -qi "vulnerability\|exploit\|cve"; then
